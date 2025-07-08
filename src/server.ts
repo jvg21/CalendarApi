@@ -28,7 +28,7 @@ async function test() {
 test();
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3010;
 
 // Security middleware
 app.use(helmet());
@@ -75,5 +75,5 @@ app.use('*', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`🚀 Calendar API running on port ${PORT}`);
-  console.log(`📋 Health check: http://localhost:${PORT}/health`);
+  console.log(`📋 Health check: http://0.0.0.0:${PORT}/health`);
 });

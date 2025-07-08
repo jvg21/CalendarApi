@@ -1650,4 +1650,48 @@ router.delete('/instances/:id', authenticateToken, requireAdmin, async (req, res
   }
 });
 
+/**
+ * @swagger
+ * /api/appointments/{id}/delete:
+ *   delete:
+ *     tags: [Appointments]
+ *     summary: Delete appointment permanently
+ *     description: Permanently deletes an appointment from database and Google Calendar
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       200:
+ *         description: Appointment deleted permanently
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "Appointment deleted permanently"
+ *       404:
+ *         description: Appointment not found
+ *       400:
+ *         description: Bad request
+ */
+router.delete('/appointments/:id/delete', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    await appointmentService.deleteAppointment(req.params.id);
+    res.json({ message: 'Appointment deleted permanently' });
+  } catch (error) {
+    if ((error as Error).message === 'Appointment not found') {
+      res.status(404).json({ error: (error as Error).message });
+    } else {
+      res.status(400).json({ error: (error as Error).message });
+    }
+  }
+});
 export default router;

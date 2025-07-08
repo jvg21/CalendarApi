@@ -116,6 +116,36 @@ export class AppointmentService {
     }
   }
 
+  async deleteAppointment(id: string): Promise<void> {
+  const { data: appointment } = await supabase
+    .from('appointments')
+    .select('*, calendars(*)')
+    .eq('id', id)
+    .single();
+
+  if (!appointment) {
+    throw new Error('Appointment not found');
+  }
+
+  // Delete from Google Calendar if exists
+  if (appointment.google_event_id && appointment.calendars?.google_calendar_id) {
+    await this.deleteEventFromSharedCalendar(
+      appointment.calendars.google_calendar_id, 
+      appointment.google_event_id
+    );
+  }
+
+  // Delete permanently from database
+  const { error } = await supabase
+    .from('appointments')
+    .delete()
+    .eq('id', id);
+
+  if (error) {
+    throw new Error(`Failed to delete appointment: ${error.message}`);
+  }
+}
+
   async updateAppointment(id: string, updates: Partial<Appointment>): Promise<Appointment> {
     const { data: appointment } = await supabase
       .from('appointments')
@@ -235,6 +265,9 @@ export class AppointmentService {
 
     return response.data;
   }
+
+
+
 
   private async updateEventInSharedCalendar(calendarId: string, eventId: string, updates: any) {
     const event = {

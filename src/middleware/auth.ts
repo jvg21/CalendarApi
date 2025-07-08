@@ -5,6 +5,7 @@ import { supabase, supabaseAdmin } from '../config/supabase';
 interface AuthRequest extends Request {
   user?: any;
 }
+// src/middleware/auth.ts - Modifique ambos middlewares
 
 export const authenticateToken = async (req: AuthRequest, res: Response, next: NextFunction) => {
   const authHeader = req.headers['authorization'];
@@ -15,6 +16,14 @@ export const authenticateToken = async (req: AuthRequest, res: Response, next: N
     return;
   }
 
+  // Verifica se é Service Role Key
+  if (token === process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    req.user = { id: 'service-role', role: 'admin', email: 'admin@service' };
+    next();
+    return;
+  }
+
+  // Sistema JWT original (inalterado)
   try {
     const { data: { user }, error } = await supabase.auth.getUser(token);
     
@@ -36,16 +45,18 @@ export const requireAdmin = async (req: AuthRequest, res: Response, next: NextFu
     return;
   }
 
-  //console.log('User ID:', req.user.id);
+  // Se já tem role definido (Service Role Key), pula verificação no banco
+  if (req.user.role === 'admin') {
+    next();
+    return;
+  }
 
+  // Verificação normal no banco para JWT users
   const { data: profile, error } = await supabaseAdmin
     .from('users')
     .select('role')
     .eq('id', req.user.id)
     .single();
-
-  //console.log('Profile:', profile);
-  ///console.log('Error:', error);
 
   if (!profile || profile.role !== 'admin') {
     res.status(403).json({ error: 'Admin access required' });

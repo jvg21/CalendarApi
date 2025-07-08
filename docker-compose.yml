@@ -1,0 +1,46 @@
+version: '3.8'
+services:
+  calendarapi:
+    image: jvg21/calendar-api:latest
+    restart: always
+    environment:
+      - PORT=3010
+      - NODE_ENV=production
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GOOGLE_REFRESH_TOKEN=${GOOGLE_REFRESH_TOKEN}
+      - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.calendarapi.rule=Host(`calendar.armtexai.org`)"
+      - "traefik.http.routers.calendarapi.entrypoints=websecure"
+      - "traefik.http.routers.calendarapi.tls=true"
+      - "traefik.http.routers.calendarapi.tls.certresolver=letsencryptresolver"
+      - "traefik.http.services.calendarapi.loadbalancer.server.port=3010"
+      # Redirect HTTP to HTTPS
+      - "traefik.http.routers.calendarapi-http.rule=Host(`calendar.armtexai.org`)"
+      - "traefik.http.routers.calendarapi-http.entrypoints=web"
+      - "traefik.http.routers.calendarapi-http.middlewares=redirect-to-https"
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+    networks:
+      - traefik_proxy
+      - armtexai
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+networks:
+  traefik_proxy:
+    external: true
+    name: traefik_proxy
+  armtexai:
+    external: true
+    name: armtexai
