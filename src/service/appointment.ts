@@ -1,3 +1,5 @@
+// src/service/appointment.ts - Adaptado para calendário principal compartilhado
+
 import { addMinutes, parseISO } from 'date-fns';
 import { supabase } from '../config/supabase';
 import { CreateAppointmentRequest, Appointment } from '../types';
@@ -6,20 +8,30 @@ import { calendar } from '../config/google_calendar';
 export class AppointmentService {
   
   async createAppointment(request: CreateAppointmentRequest): Promise<Appointment> {
-    const { instance_id, service_id, start_datetime, client_name, client_email, client_phone, description, calendar_id } = request;
+    const { 
+      instance_id, 
+      service_id, 
+      start_datetime, 
+      end_datetime,
+      client_name, 
+      client_email, 
+      client_phone, 
+      description, 
+      calendar_id 
+    } = request;
 
     // Get service details
-    const { data: service } = await supabase
+    const { data: service, error: serviceError } = await supabase
       .from('services')
       .select('*')
       .eq('id', service_id)
       .single();
 
-    if (!service) {
+    if (serviceError || !service) {
       throw new Error('Service not found');
     }
 
-    // Determine calendar to use
+    // Determine target calendar
     let targetCalendar;
     if (calendar_id) {
       const { data } = await supabase
@@ -47,54 +59,67 @@ export class AppointmentService {
     }
 
     const startTime = parseISO(start_datetime);
-    const endTime = addMinutes(startTime, service.duration);
+    const endTime = end_datetime 
+      ? parseISO(end_datetime)
+      : addMinutes(startTime, service.duration);
 
-    // Create Google Calendar event
-    const googleEvent = await this.createGoogleEvent({
-      calendarId: targetCalendar.google_calendar_id,
-      summary: `${service.name} - ${client_name}`,
-      description: description || `Service: ${service.name}\nClient: ${client_name}`,
-      start: startTime,
-      end: endTime,
-      attendees: client_email ? [{ email: client_email }] : []
-    });
-
-    // Save to database
-    const { data: appointment, error } = await supabase
-      .from('appointments')
-      .insert({
-        instance_id,
-        calendar_id: targetCalendar.id,
-        service_id,
-        google_event_id: googleEvent.id,
-        title: `${service.name} - ${client_name}`,
-        description,
-        start_datetime: startTime.toISOString(),
-        end_datetime: endTime.toISOString(),
-        client_name,
-        client_email,
-        client_phone,
-        status: 'scheduled'
-      })
-      .select()
-      .single();
-
-    if (error) {
-      // Rollback Google Calendar event if DB insert fails
-      await this.deleteGoogleEvent(targetCalendar.google_calendar_id, googleEvent.id!);
-      throw new Error('Failed to create appointment');
+    // Validate times
+    if (endTime <= startTime) {
+      throw new Error('End time must be after start time');
     }
 
-    // Also add to main calendar
-    await this.addToMainCalendar(appointment, service, targetCalendar);
+    try {
+      // Create event in client's shared calendar using your main calendar credentials
+      const googleEvent = await this.createEventInSharedCalendar({
+        targetCalendarId: targetCalendar.google_calendar_id, // Cliente's calendar ID
+        summary: `${service.name} - ${client_name}`,
+        description: this.buildEventDescription(service, client_name, description),
+        start: startTime,
+        end: endTime,
+        attendees: client_email ? [{ email: client_email }] : []
+      });
 
-    return appointment;
+      // Save to database
+      const { data: appointment, error } = await supabase
+        .from('appointments')
+        .insert({
+          instance_id,
+          calendar_id: targetCalendar.id,
+          service_id,
+          google_event_id: googleEvent.id,
+          title: `${service.name} - ${client_name}`,
+          description,
+          start_datetime: startTime.toISOString(),
+          end_datetime: endTime.toISOString(),
+          client_name,
+          client_email,
+          client_phone,
+          status: 'scheduled'
+        })
+        .select()
+        .single();
+
+      if (error) {
+        // Rollback: delete the created event
+        await this.deleteEventFromSharedCalendar(
+          targetCalendar.google_calendar_id, 
+          googleEvent.id!
+        );
+        throw new Error(`Failed to create appointment: ${error.message}`);
+      }
+
+      return appointment;
+
+    } catch (error) {
+      console.error('Error creating appointment:', error);
+      throw new Error(`Failed to create appointment: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
   }
 
   async updateAppointment(id: string, updates: Partial<Appointment>): Promise<Appointment> {
     const { data: appointment } = await supabase
       .from('appointments')
-      .select('*, calendars(*)')
+      .select('*, calendars(*), services(*)')
       .eq('id', id)
       .single();
 
@@ -102,28 +127,46 @@ export class AppointmentService {
       throw new Error('Appointment not found');
     }
 
-    // Update Google Calendar event if time changed
-    if (updates.start_datetime || updates.end_datetime) {
-      await this.updateGoogleEvent(
+    let endTime = updates.end_datetime;
+    
+    // Recalculate end time if start changed but end not provided
+    if (updates.start_datetime && !updates.end_datetime) {
+      const startTime = parseISO(updates.start_datetime);
+      endTime = addMinutes(startTime, appointment.services.duration).toISOString();
+    }
+
+    // Update Google Calendar event if time/title changed
+    if (updates.start_datetime || updates.end_datetime || updates.title) {
+      await this.updateEventInSharedCalendar(
         appointment.calendars.google_calendar_id,
         appointment.google_event_id,
         {
           start: updates.start_datetime ? parseISO(updates.start_datetime) : parseISO(appointment.start_datetime),
-          end: updates.end_datetime ? parseISO(updates.end_datetime) : parseISO(appointment.end_datetime),
-          summary: updates.title || appointment.title
+          end: endTime ? parseISO(endTime) : parseISO(appointment.end_datetime),
+          summary: updates.title || appointment.title,
+          description: updates.description || appointment.description
         }
       );
     }
 
+    const updateData = {
+      ...updates,
+      updated_at: new Date().toISOString()
+    };
+
+    if (endTime) {
+      updateData.end_datetime = endTime;
+    }
+
     const { data: updatedAppointment, error } = await supabase
       .from('appointments')
-      .update({ ...updates, updated_at: new Date().toISOString() })
+      .update(updateData)
       .eq('id', id)
       .select()
       .single();
 
     if (error) {
-      throw new Error('Failed to update appointment');
+      throw new Error(`Failed to update appointment: ${error.message}`);
     }
 
     return updatedAppointment;
@@ -140,9 +183,11 @@ export class AppointmentService {
       throw new Error('Appointment not found');
     }
 
-    // Delete from Google Calendar
-    await this.deleteGoogleEvent(appointment.calendars.google_calendar_id, appointment.google_event_id);
-    await this.deleteGoogleEvent(process.env.MAIN_CALENDAR_ID!, appointment.google_event_id);
+    // Delete from client's shared calendar
+    await this.deleteEventFromSharedCalendar(
+      appointment.calendars.google_calendar_id, 
+      appointment.google_event_id
+    );
 
     // Update status in database
     await supabase
@@ -151,7 +196,9 @@ export class AppointmentService {
       .eq('id', id);
   }
 
-  private async createGoogleEvent(eventData: any) {
+  // Private methods for shared calendar management
+
+  private async createEventInSharedCalendar(eventData: any) {
     const event = {
       summary: eventData.summary,
       description: eventData.description,
@@ -164,19 +211,35 @@ export class AppointmentService {
         timeZone: 'America/Sao_Paulo',
       },
       attendees: eventData.attendees,
+      // Google Meet automático
+      conferenceData: {
+        createRequest: {
+          requestId: `meet-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          conferenceSolutionKey: {
+            type: 'hangoutsMeet'
+          }
+        }
+      },
+      // Configurações de acesso
+      guestsCanModify: false,
+      guestsCanInviteOthers: false,
+      guestsCanSeeOtherGuests: true,
     };
 
     const response = await calendar.events.insert({
-      calendarId: eventData.calendarId,
+      calendarId: eventData.targetCalendarId,
       requestBody: event,
+      conferenceDataVersion: 1, // Necessário para criar Meet
+      sendUpdates: 'all'
     });
 
     return response.data;
   }
 
-  private async updateGoogleEvent(calendarId: string, eventId: string, updates: any) {
+  private async updateEventInSharedCalendar(calendarId: string, eventId: string, updates: any) {
     const event = {
       summary: updates.summary,
+      description: updates.description,
       start: {
         dateTime: updates.start.toISOString(),
         timeZone: 'America/Sao_Paulo',
@@ -191,30 +254,78 @@ export class AppointmentService {
       calendarId,
       eventId,
       requestBody: event,
+      conferenceDataVersion: 1, // Mantém link do Meet
+      sendUpdates: 'all'
     });
   }
 
-  private async deleteGoogleEvent(calendarId: string, eventId: string) {
+  private async deleteEventFromSharedCalendar(calendarId: string, eventId: string) {
     try {
       await calendar.events.delete({
         calendarId,
         eventId,
+        sendUpdates: 'all' // Notifica sobre cancelamento
       });
     } catch (error) {
-      console.error('Error deleting Google Calendar event:', error);
+      console.error('Error deleting event from shared calendar:', error);
+      // Não throw error para não quebrar o fluxo de cancelamento
     }
   }
 
-  private async addToMainCalendar(appointment: any, service: any, calendar: any) {
-    const mainCalendarId = process.env.MAIN_CALENDAR_ID!;
+  private buildEventDescription(service: any, clientName: string, description?: string): string {
+    let eventDescription = `Serviço: ${service.name}\n`;
+    eventDescription += `Cliente: ${clientName}\n`;
+    eventDescription += `Duração: ${service.duration} minutos\n`;
     
-    await this.createGoogleEvent({
-      calendarId: mainCalendarId,
-      summary: `[${calendar.name}] ${service.name} - ${appointment.client_name}`,
-      description: `Instance: ${calendar.name}\nService: ${service.name}\nClient: ${appointment.client_name}`,
-      start: parseISO(appointment.start_datetime),
-      end: parseISO(appointment.end_datetime),
-      attendees: []
-    });
+    if (service.price) {
+      eventDescription += `Valor: R$ ${service.price.toFixed(2)}\n`;
+    }
+    
+    eventDescription += `\n📞 Link do Google Meet será gerado automaticamente\n`;
+    eventDescription += `📧 Todos os participantes receberão convite por email\n`;
+    
+    if (description) {
+      eventDescription += `\nObservações: ${description}`;
+    }
+
+    return eventDescription;
+  }
+
+  // Método para verificar disponibilidade em calendários compartilhados
+  async checkSharedCalendarAvailability(calendarId: string, startTime: Date, endTime: Date): Promise<boolean> {
+    try {
+      const response = await calendar.events.list({
+        calendarId,
+        timeMin: startTime.toISOString(),
+        timeMax: endTime.toISOString(),
+        singleEvents: true,
+        orderBy: 'startTime',
+      });
+
+      // Se há eventos no período, não está disponível
+      return !response.data.items || response.data.items.length === 0;
+    } catch (error) {
+      console.error('Error checking calendar availability:', error);
+      return false; // Assume não disponível em caso de erro
+    }
+  }
+
+  // Método para listar eventos de um calendário compartilhado
+  async getSharedCalendarEvents(calendarId: string, startDate: Date, endDate: Date) {
+    try {
+      const response = await calendar.events.list({
+        calendarId,
+        timeMin: startDate.toISOString(),
+        timeMax: endDate.toISOString(),
+        singleEvents: true,
+        orderBy: 'startTime',
+        maxResults: 250
+      });
+
+      return response.data.items || [];
+    } catch (error) {
+      console.error('Error fetching shared calendar events:', error);
+      return [];
+    }
   }
 }

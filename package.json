@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "nodemon src/server.ts",
     "build": "tsc",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "setup:google": "ts-node src/scripts/setup-google-auth.ts",
+    "test:google": "ts-node src/scripts/test-google-auth.ts"
   },
   "keywords": [],
   "author": "",

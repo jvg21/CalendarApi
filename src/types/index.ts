@@ -69,7 +69,7 @@ export interface Appointment {
   title: string;
   description?: string;
   start_datetime: string;
-  end_datetime: string;
+  end_datetime?: string;
   client_name: string;
   client_email?: string;
   client_phone?: string;
@@ -105,6 +105,7 @@ export interface CreateAppointmentRequest {
   instance_id: string;
   service_id: string;
   start_datetime: string;
+  end_datetime?: string; // Agora opcional - será calculado com base na duração do serviço
   client_name: string;
   client_email?: string;
   client_phone?: string;

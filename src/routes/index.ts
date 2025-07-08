@@ -878,45 +878,9 @@ router.post('/availability/suggest', authenticateToken, requireAdmin, async (req
     res.status(400).json({ error: (error as Error).message });
   }
 });
-
 /**
  * @swagger
  * /api/appointments:
- *   get:
- *     tags: [Appointments]
- *     summary: Get appointments
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: query
- *         name: instance_id
- *         schema:
- *           type: string
- *           format: uuid
- *       - in: query
- *         name: start_date
- *         schema:
- *           type: string
- *           format: date
- *       - in: query
- *         name: end_date
- *         schema:
- *           type: string
- *           format: date
- *       - in: query
- *         name: status
- *         schema:
- *           type: string
- *           enum: [scheduled, confirmed, cancelled, completed]
- *     responses:
- *       200:
- *         description: List of appointments
- *         content:
- *           application/json:
- *             schema:
- *               type: array
- *               items:
- *                 $ref: '#/components/schemas/Appointment'
  *   post:
  *     tags: [Appointments]
  *     summary: Create appointment
@@ -939,6 +903,10 @@ router.post('/availability/suggest', authenticateToken, requireAdmin, async (req
  *               start_datetime:
  *                 type: string
  *                 format: date-time
+ *               end_datetime:
+ *                 type: string
+ *                 format: date-time
+ *                 description: Optional - will be calculated based on service duration if not provided
  *               client_name:
  *                 type: string
  *               client_email:
@@ -951,6 +919,7 @@ router.post('/availability/suggest', authenticateToken, requireAdmin, async (req
  *               calendar_id:
  *                 type: string
  *                 format: uuid
+ *                 description: Optional - will use highest priority calendar if not provided
  *     responses:
  *       200:
  *         description: Appointment created
@@ -958,6 +927,10 @@ router.post('/availability/suggest', authenticateToken, requireAdmin, async (req
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/Appointment'
+ *       400:
+ *         description: Bad request - validation error
+ *       404:
+ *         description: Service or calendar not found
  */
 router.get('/appointments', authenticateToken, requireAdmin, async (req, res) => {
   const { instance_id, start_date, end_date, status } = req.query;
@@ -1135,6 +1108,545 @@ router.get('/availability/quick/:instanceId/:days', authenticateToken, requireAd
     res.json({ summary, slots: slots.slice(0, 20) }); // Return first 20 slots
   } catch (error) {
     res.status(400).json({ error: (error as Error).message });
+  }
+});
+
+
+// Adicione estas rotas ao seu arquivo src/routes/index.ts
+
+/**
+ * @swagger
+ * /api/calendars:
+ *   get:
+ *     tags: [Calendars]
+ *     summary: Get all calendars
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: instance_id
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Filter by instance ID (optional)
+ *       - in: query
+ *         name: is_active
+ *         schema:
+ *           type: boolean
+ *         description: Filter by active status (optional)
+ *     responses:
+ *       200:
+ *         description: List of all calendars
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 $ref: '#/components/schemas/Calendar'
+ */
+router.get('/calendars', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { instance_id, is_active } = req.query;
+    
+    let query = supabase
+      .from('calendars')
+      .select(`
+        *,
+        instances(id, name)
+      `)
+      .order('priority');
+
+    if (instance_id) {
+      query = query.eq('instance_id', instance_id);
+    }
+
+    if (is_active !== undefined) {
+      query = query.eq('is_active', is_active === 'true');
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * @swagger
+ * /api/calendars/{id}:
+ *   get:
+ *     tags: [Calendars]
+ *     summary: Get calendar by ID
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       200:
+ *         description: Calendar details
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Calendar'
+ *       404:
+ *         description: Calendar not found
+ */
+router.get('/calendars/:id', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('calendars')
+      .select(`
+        *,
+        instances(id, name)
+      `)
+      .eq('id', req.params.id)
+      .single();
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        res.status(404).json({ error: 'Calendar not found' });
+        return;
+      }
+      res.status(500).json({ error: error.message });
+      return;
+    }
+
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * @swagger
+ * /api/calendars/{id}:
+ *   put:
+ *     tags: [Calendars]
+ *     summary: Update calendar
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/Calendar'
+ *     responses:
+ *       200:
+ *         description: Calendar updated
+ *       404:
+ *         description: Calendar not found
+ */
+router.put('/calendars/:id', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('calendars')
+      .update(req.body)
+      .eq('id', req.params.id)
+      .select()
+      .single();
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        res.status(404).json({ error: 'Calendar not found' });
+        return;
+      }
+      res.status(400).json({ error: error.message });
+      return;
+    }
+
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * @swagger
+ * /api/calendars/{id}:
+ *   delete:
+ *     tags: [Calendars]
+ *     summary: Delete calendar
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       200:
+ *         description: Calendar deleted
+ *       404:
+ *         description: Calendar not found
+ */
+router.delete('/calendars/:id', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('calendars')
+      .delete()
+      .eq('id', req.params.id)
+      .select()
+      .single();
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        res.status(404).json({ error: 'Calendar not found' });
+        return;
+      }
+      res.status(500).json({ error: error.message });
+      return;
+    }
+
+    res.json({ message: 'Calendar deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * @swagger
+ * /api/services:
+ *   get:
+ *     tags: [Services]
+ *     summary: Get all services
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: instance_id
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Filter by instance ID (optional)
+ *       - in: query
+ *         name: is_active
+ *         schema:
+ *           type: boolean
+ *         description: Filter by active status (optional)
+ *       - in: query
+ *         name: category
+ *         schema:
+ *           type: string
+ *         description: Filter by category (optional)
+ *     responses:
+ *       200:
+ *         description: List of all services
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 $ref: '#/components/schemas/Service'
+ */
+router.get('/services', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { instance_id, is_active, category } = req.query;
+    
+    let query = supabase
+      .from('services')
+      .select(`
+        *,
+        instances(id, name)
+      `)
+      .order('name');
+
+    if (instance_id) {
+      query = query.eq('instance_id', instance_id);
+    }
+
+    if (is_active !== undefined) {
+      query = query.eq('is_active', is_active === 'true');
+    }
+
+    if (category) {
+      query = query.eq('category', category);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * @swagger
+ * /api/services/{id}:
+ *   get:
+ *     tags: [Services]
+ *     summary: Get service by ID
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       200:
+ *         description: Service details
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Service'
+ *       404:
+ *         description: Service not found
+ */
+router.get('/services/:id', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('services')
+      .select(`
+        *,
+        instances(id, name)
+      `)
+      .eq('id', req.params.id)
+      .single();
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        res.status(404).json({ error: 'Service not found' });
+        return;
+      }
+      res.status(500).json({ error: error.message });
+      return;
+    }
+
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * @swagger
+ * /api/services/{id}:
+ *   put:
+ *     tags: [Services]
+ *     summary: Update service
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/Service'
+ *     responses:
+ *       200:
+ *         description: Service updated
+ *       404:
+ *         description: Service not found
+ */
+router.put('/services/:id', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('services')
+      .update(req.body)
+      .eq('id', req.params.id)
+      .select()
+      .single();
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        res.status(404).json({ error: 'Service not found' });
+        return;
+      }
+      res.status(400).json({ error: error.message });
+      return;
+    }
+
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * @swagger
+ * /api/services/{id}:
+ *   delete:
+ *     tags: [Services]
+ *     summary: Delete service
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       200:
+ *         description: Service deleted
+ *       404:
+ *         description: Service not found
+ */
+router.delete('/services/:id', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('services')
+      .delete()
+      .eq('id', req.params.id)
+      .select()
+      .single();
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        res.status(404).json({ error: 'Service not found' });
+        return;
+      }
+      res.status(500).json({ error: error.message });
+      return;
+    }
+
+    res.json({ message: 'Service deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * @swagger
+ * /api/services/categories:
+ *   get:
+ *     tags: [Services]
+ *     summary: Get service categories
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: List of service categories
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: string
+ */
+router.get('/services/categories', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('services')
+      .select('category')
+      .not('category', 'is', null)
+      .order('category');
+
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+
+    // Extract unique categories
+    const categories = [...new Set(data.map(item => item.category))];
+    res.json(categories);
+  } catch (error) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * @swagger
+ * /api/instances/{id}:
+ *   delete:
+ *     tags: [Instances]
+ *     summary: Delete instance
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       200:
+ *         description: Instance deleted successfully
+ *       404:
+ *         description: Instance not found
+ *       400:
+ *         description: Cannot delete instance with existing appointments
+ */
+router.delete('/instances/:id', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    // Check if instance has appointments
+    const { data: appointments, error: appointmentsError } = await supabase
+      .from('appointments')
+      .select('id')
+      .eq('instance_id', req.params.id)
+      .eq('status', 'scheduled')
+      .limit(1);
+
+    if (appointmentsError) {
+      res.status(500).json({ error: appointmentsError.message });
+      return;
+    }
+
+    if (appointments && appointments.length > 0) {
+      res.status(400).json({ 
+        error: 'Cannot delete instance with active appointments. Cancel all appointments first.' 
+      });
+      return;
+    }
+
+    // Delete the instance
+    const { data, error } = await supabase
+      .from('instances')
+      .delete()
+      .eq('id', req.params.id)
+      .select()
+      .single();
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        res.status(404).json({ error: 'Instance not found' });
+        return;
+      }
+      res.status(500).json({ error: error.message });
+      return;
+    }
+
+    res.json({ message: 'Instance deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
