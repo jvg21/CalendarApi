@@ -59,7 +59,6 @@ export interface Service {
   is_active: boolean;
   created_at: string;
 }
-
 export interface Appointment {
   id: string;
   instance_id: string;
@@ -74,8 +73,31 @@ export interface Appointment {
   client_email?: string;
   client_phone?: string;
   status: 'scheduled' | 'confirmed' | 'cancelled' | 'completed';
+  
+  // NOVOS CAMPOS ADICIONADOS
+  flow_id?: number;
+  agent_id?: number;
+  user_id?: number;
+  
   created_at: string;
   updated_at: string;
+}
+
+export interface CreateAppointmentRequest {
+  instance_id: string;
+  service_id: string;
+  start_datetime: string;
+  end_datetime?: string;
+  client_name: string;
+  client_email?: string;
+  client_phone?: string;
+  description?: string;
+  calendar_id?: string;
+  
+  // NOVOS CAMPOS ADICIONADOS
+  flow_id?: number;
+  agent_id?: number;
+  user_id?: number;
 }
 
 export interface AvailabilityRequest {
@@ -99,16 +121,4 @@ export interface PreferenceOptions {
   preferred_times?: string[]; // ["09:00", "14:00"]
   avoid_times?: string[];
   max_suggestions?: number;
-}
-
-export interface CreateAppointmentRequest {
-  instance_id: string;
-  service_id: string;
-  start_datetime: string;
-  end_datetime?: string; // Agora opcional - será calculado com base na duração do serviço
-  client_name: string;
-  client_email?: string;
-  client_phone?: string;
-  description?: string;
-  calendar_id?: string; // if not provided, use highest priority available
 }

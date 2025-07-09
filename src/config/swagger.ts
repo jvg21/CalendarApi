@@ -122,35 +122,27 @@ const options = {
                             enum: ['scheduled', 'confirmed', 'cancelled', 'completed'],
                             default: 'scheduled'
                         },
+
+                        // NOVOS CAMPOS ADICIONADOS
+                        flow_id: {
+                            type: 'integer',
+                            description: 'ID do fluxo de agendamento'
+                        },
+                        agent_id: {
+                            type: 'integer',
+                            description: 'ID do agente responsável'
+                        },
+                        user_id: {
+                            type: 'integer',
+                            description: 'ID do usuário que criou o agendamento'
+                        },
+
                         created_at: { type: 'string', format: 'date-time' },
                         updated_at: { type: 'string', format: 'date-time' },
                     },
                     required: ['instance_id', 'service_id', 'start_datetime', 'client_name'],
                 },
-                TimeSlot: {
-                    type: 'object',
-                    properties: {
-                        start_datetime: { type: 'string', format: 'date-time' },
-                        end_datetime: { type: 'string', format: 'date-time' },
-                        calendar_id: { type: 'string', format: 'uuid' },
-                        calendar_name: { type: 'string' },
-                        priority: { type: 'integer' },
-                    },
-                },
-                AvailabilityRequest: {
-                    type: 'object',
-                    properties: {
-                        instance_id: { type: 'string', format: 'uuid' },
-                        service_id: { type: 'string', format: 'uuid' },
-                        start_date: { type: 'string', format: 'date' },
-                        end_date: { type: 'string', format: 'date' },
-                        calendar_ids: {
-                            type: 'array',
-                            items: { type: 'string', format: 'uuid' }
-                        },
-                    },
-                    required: ['instance_id', 'service_id', 'start_date', 'end_date'],
-                },
+
                 PreferenceOptions: {
                     type: 'object',
                     properties: {
@@ -192,9 +184,9 @@ const options = {
             },
         ],
     },
-    apis: process.env.NODE_ENV === 'production' 
-  ? ['./dist/routes/*.js', './dist/server.js']
-  : ['./src/routes/*.ts', './src/server.ts'],
+    apis: process.env.NODE_ENV === 'production'
+        ? ['./dist/routes/*.js', './dist/server.js']
+        : ['./src/routes/*.ts', './src/server.ts'],
 };
 
 export const specs = swaggerJsdoc(options);

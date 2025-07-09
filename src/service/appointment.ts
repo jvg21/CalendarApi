@@ -6,18 +6,21 @@ import { CreateAppointmentRequest, Appointment } from '../types';
 import { calendar } from '../config/google_calendar';
 
 export class AppointmentService {
-  
+
   async createAppointment(request: CreateAppointmentRequest): Promise<Appointment> {
-    const { 
-      instance_id, 
-      service_id, 
-      start_datetime, 
+    const {
+      instance_id,
+      service_id,
+      start_datetime,
       end_datetime,
-      client_name, 
-      client_email, 
-      client_phone, 
-      description, 
-      calendar_id 
+      client_name,
+      client_email,
+      client_phone,
+      description,
+      calendar_id,
+      flow_id,
+      agent_id,
+      user_id
     } = request;
 
     // Get service details
@@ -59,7 +62,7 @@ export class AppointmentService {
     }
 
     const startTime = parseISO(start_datetime);
-    const endTime = end_datetime 
+    const endTime = end_datetime
       ? parseISO(end_datetime)
       : addMinutes(startTime, service.duration);
 
@@ -94,7 +97,10 @@ export class AppointmentService {
           client_name,
           client_email,
           client_phone,
-          status: 'scheduled'
+          status: 'scheduled',
+          flow_id,
+          agent_id,
+          user_id
         })
         .select()
         .single();
@@ -102,7 +108,7 @@ export class AppointmentService {
       if (error) {
         // Rollback: delete the created event
         await this.deleteEventFromSharedCalendar(
-          targetCalendar.google_calendar_id, 
+          targetCalendar.google_calendar_id,
           googleEvent.id!
         );
         throw new Error(`Failed to create appointment: ${error.message}`);
@@ -117,34 +123,34 @@ export class AppointmentService {
   }
 
   async deleteAppointment(id: string): Promise<void> {
-  const { data: appointment } = await supabase
-    .from('appointments')
-    .select('*, calendars(*)')
-    .eq('id', id)
-    .single();
+    const { data: appointment } = await supabase
+      .from('appointments')
+      .select('*, calendars(*)')
+      .eq('id', id)
+      .single();
 
-  if (!appointment) {
-    throw new Error('Appointment not found');
+    if (!appointment) {
+      throw new Error('Appointment not found');
+    }
+
+    // Delete from Google Calendar if exists
+    if (appointment.google_event_id && appointment.calendars?.google_calendar_id) {
+      await this.deleteEventFromSharedCalendar(
+        appointment.calendars.google_calendar_id,
+        appointment.google_event_id
+      );
+    }
+
+    // Delete permanently from database
+    const { error } = await supabase
+      .from('appointments')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      throw new Error(`Failed to delete appointment: ${error.message}`);
+    }
   }
-
-  // Delete from Google Calendar if exists
-  if (appointment.google_event_id && appointment.calendars?.google_calendar_id) {
-    await this.deleteEventFromSharedCalendar(
-      appointment.calendars.google_calendar_id, 
-      appointment.google_event_id
-    );
-  }
-
-  // Delete permanently from database
-  const { error } = await supabase
-    .from('appointments')
-    .delete()
-    .eq('id', id);
-
-  if (error) {
-    throw new Error(`Failed to delete appointment: ${error.message}`);
-  }
-}
 
   async updateAppointment(id: string, updates: Partial<Appointment>): Promise<Appointment> {
     const { data: appointment } = await supabase
@@ -158,7 +164,7 @@ export class AppointmentService {
     }
 
     let endTime = updates.end_datetime;
-    
+
     // Recalculate end time if start changed but end not provided
     if (updates.start_datetime && !updates.end_datetime) {
       const startTime = parseISO(updates.start_datetime);
@@ -215,7 +221,7 @@ export class AppointmentService {
 
     // Delete from client's shared calendar
     await this.deleteEventFromSharedCalendar(
-      appointment.calendars.google_calendar_id, 
+      appointment.calendars.google_calendar_id,
       appointment.google_event_id
     );
 
@@ -309,14 +315,14 @@ export class AppointmentService {
     let eventDescription = `Serviço: ${service.name}\n`;
     eventDescription += `Cliente: ${clientName}\n`;
     eventDescription += `Duração: ${service.duration} minutos\n`;
-    
+
     if (service.price) {
       eventDescription += `Valor: R$ ${service.price.toFixed(2)}\n`;
     }
-    
+
     eventDescription += `\n📞 Link do Google Meet será gerado automaticamente\n`;
     eventDescription += `📧 Todos os participantes receberão convite por email\n`;
-    
+
     if (description) {
       eventDescription += `\nObservações: ${description}`;
     }
