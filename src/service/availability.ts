@@ -3,7 +3,9 @@
 import { addMinutes, format, parseISO, startOfDay, endOfDay } from 'date-fns';
 import { supabase } from '../config/supabase';
 import { calendar } from '../config/google_calendar';
-import { AvailabilityRequest, TimeSlot, BusinessHours } from '../types';
+import { AvailabilityRequest, TimeSlot, BusinessHours, SlotCheckRequest, SlotCheckResponse } from '../types';
+
+
 
 export class AvailabilityService {
   
@@ -198,8 +200,14 @@ export class AvailabilityService {
     for (const event of existingEvents) {
       if (!event.start || !event.end) continue;
       
-      const eventStart = new Date(event.start.dateTime || event.start.date);
-      const eventEnd = new Date(event.end.dateTime || event.end.date);
+      // Verificar se temos dados válidos de data/hora
+      const startDateTimeValue = event.start.dateTime || event.start.date;
+      const endDateTimeValue = event.end.dateTime || event.end.date;
+      
+      if (!startDateTimeValue || !endDateTimeValue) continue;
+      
+      const eventStart = new Date(startDateTimeValue);
+      const eventEnd = new Date(endDateTimeValue);
       
       if (this.timeRangesOverlap(slotStart, slotEnd, eventStart, eventEnd)) {
         return true;
@@ -285,5 +293,239 @@ export class AvailabilityService {
       
       return new Date(a.start_datetime).getTime() - new Date(b.start_datetime).getTime();
     });
+  }
+
+  // ============================================================
+  // NOVO MÉTODO: Verificação de Slot Específico
+  // ============================================================
+  
+  async checkSpecificSlot(request: SlotCheckRequest): Promise<SlotCheckResponse> {
+    const { instance_id, service_id, start_datetime, calendar_ids } = request;
+
+    // Buscar dados do serviço
+    const { data: service, error: serviceError } = await supabase
+      .from('services')
+      .select('name, duration, buffer_before, buffer_after, instance_id')
+      .eq('id', service_id)
+      .single();
+
+    if (serviceError || !service) {
+      throw new Error('Serviço não encontrado');
+    }
+
+    // Verificar se o serviço pertence à instância
+    if (service.instance_id !== instance_id) {
+      throw new Error('Serviço não pertence à instância informada');
+    }
+
+    // Buscar horário comercial da instância
+    const { data: instance } = await supabase
+      .from('instances')
+      .select('business_hours, timezone')
+      .eq('id', instance_id)
+      .single();
+
+    if (!instance) {
+      throw new Error('Instância não encontrada');
+    }
+
+    // Buscar calendários disponíveis
+    let calendarsQuery = supabase
+      .from('calendars')
+      .select('id, name, google_calendar_id, instance_id, is_active')
+      .eq('instance_id', instance_id)
+      .eq('is_active', true);
+
+    if (calendar_ids && calendar_ids.length > 0) {
+      calendarsQuery = calendarsQuery.in('id', calendar_ids);
+    }
+
+    const { data: calendars } = await calendarsQuery.order('priority');
+
+    if (!calendars || calendars.length === 0) {
+      return {
+        available: false,
+        service_name: service.name,
+        start_datetime,
+        end_datetime: this.calculateEndTime(start_datetime, service.duration),
+        calendar_name: 'Nenhum calendário disponível',
+        calendar_id:'',
+        conflict_reason: 'Nenhum calendário ativo encontrado'
+      };
+    }
+
+    const startTime = parseISO(start_datetime);
+    const endTime = addMinutes(startTime, service.duration);
+
+    // Verificar se está no futuro
+    if (startTime <= new Date()) {
+      return {
+        available: false,
+        service_name: service.name,
+        start_datetime,
+        end_datetime: endTime.toISOString(),
+        calendar_name: calendars[0].name,
+          calendar_id:calendars[0].id,
+        conflict_reason: 'Horário no passado'
+      };
+    }
+
+    // Verificar se está dentro do horário comercial
+    const businessHoursCheck = this.checkBusinessHours(startTime, endTime, instance.business_hours);
+    if (!businessHoursCheck.valid) {
+      return {
+        available: false,
+        service_name: service.name,
+        start_datetime,
+        end_datetime: endTime.toISOString(),
+        calendar_name: calendars[0].name,
+          calendar_id:calendars[0].id,
+        conflict_reason: businessHoursCheck.reason
+      };
+    }
+
+    // Verificar disponibilidade em cada calendário
+    for (const calendar of calendars) {
+      const calendarCheck = await this.checkCalendarAvailability(
+        calendar,
+        service,
+        startTime,
+        endTime
+      );
+
+      if (calendarCheck.available) {
+        return {
+          available: true,
+          service_name: service.name,
+          start_datetime,
+          end_datetime: endTime.toISOString(),
+          calendar_id:calendar.id,
+          calendar_name: calendar.name
+        };
+      }
+    }
+
+    // Se chegou aqui, nenhum calendário está disponível
+    // Retornar o motivo do primeiro calendário verificado
+    const firstCalendarCheck = await this.checkCalendarAvailability(
+      calendars[0],
+      service,
+      startTime,
+      endTime
+    );
+
+    return {
+      available: false,
+      service_name: service.name,
+      start_datetime,
+      end_datetime: endTime.toISOString(),
+      calendar_name: calendars[0].name,
+      calendar_id:calendars[0].id,
+      conflict_reason: firstCalendarCheck.conflict_reason || 'Horário ocupado'
+    };
+  }
+
+  // Método auxiliar para verificar disponibilidade de um calendário específico
+  private async checkCalendarAvailability(
+    calendar: any,
+    service: any,
+    startTime: Date,
+    endTime: Date
+  ): Promise<{ available: boolean; conflict_reason?: string }> {
+    const endTimeWithBuffer = addMinutes(endTime, service.buffer_after || 0);
+    const startTimeWithBuffer = addMinutes(startTime, -(service.buffer_before || 0));
+
+    // Verificar conflitos no Google Calendar
+    try {
+      const existingEvents = await this.getSharedCalendarEvents(
+        calendar.google_calendar_id,
+        startOfDay(startTime),
+        endOfDay(startTime)
+      );
+
+      // Verificar conflitos com eventos existentes
+      for (const event of existingEvents) {
+        if (!event.start || !event.end) continue;
+        
+        // Verificar se temos dados válidos de data/hora
+        const startDateTimeValue = event.start.dateTime || event.start.date;
+        const endDateTimeValue = event.end.dateTime || event.end.date;
+        
+        if (!startDateTimeValue || !endDateTimeValue) continue;
+        
+        const eventStart = new Date(startDateTimeValue);
+        const eventEnd = new Date(endDateTimeValue);
+        
+        if (this.timeRangesOverlap(startTimeWithBuffer, endTimeWithBuffer, eventStart, eventEnd)) {
+          return {
+            available: false,
+            conflict_reason: `Conflito com evento: ${event.summary || 'Sem título'}`
+          };
+        }
+      }
+
+      return { available: true };
+
+    } catch (error) {
+      console.error('Erro ao verificar calendário:', error);
+      return {
+        available: false,
+        conflict_reason: 'Erro ao acessar calendário'
+      };
+    }
+  }
+
+  // Métodos auxiliares para checkSpecificSlot
+  private calculateEndTime(startDateTime: string, duration: number): string {
+    const startTime = parseISO(startDateTime);
+    const endTime = addMinutes(startTime, duration);
+    return endTime.toISOString();
+  }
+
+  private checkBusinessHours(startTime: Date, endTime: Date, businessHours: BusinessHours): { valid: boolean; reason?: string } {
+    const dayName = format(startTime, 'EEEE').toLowerCase() as keyof BusinessHours;
+    const daySchedule = businessHours[dayName];
+
+    if (!daySchedule.enabled) {
+      return { valid: false, reason: `${dayName} não é dia útil` };
+    }
+
+    // Verificar horário de funcionamento
+    const [startHour, startMin] = daySchedule.start_time.split(':').map(Number);
+    const [endHour, endMin] = daySchedule.end_time.split(':').map(Number);
+    
+    const businessStart = new Date(startTime);
+    businessStart.setHours(startHour, startMin, 0, 0);
+    
+    const businessEnd = new Date(startTime);
+    businessEnd.setHours(endHour, endMin, 0, 0);
+
+    if (startTime < businessStart || endTime > businessEnd) {
+      return { 
+        valid: false, 
+        reason: `Fora do horário comercial (${daySchedule.start_time} - ${daySchedule.end_time})` 
+      };
+    }
+
+    // Verificar horário de pausa
+    if (daySchedule.break_start && daySchedule.break_end) {
+      const [breakStartHour, breakStartMin] = daySchedule.break_start.split(':').map(Number);
+      const [breakEndHour, breakEndMin] = daySchedule.break_end.split(':').map(Number);
+      
+      const breakStart = new Date(startTime);
+      breakStart.setHours(breakStartHour, breakStartMin, 0, 0);
+      
+      const breakEnd = new Date(startTime);
+      breakEnd.setHours(breakEndHour, breakEndMin, 0, 0);
+      
+      if (this.timeRangesOverlap(startTime, endTime, breakStart, breakEnd)) {
+        return { 
+          valid: false, 
+          reason: `Conflito com horário de pausa (${daySchedule.break_start} - ${daySchedule.break_end})` 
+        };
+      }
+    }
+
+    return { valid: true };
   }
 }

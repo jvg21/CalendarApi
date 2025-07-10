@@ -1199,6 +1199,9 @@ router.post('/availability/suggest', authenticateToken, requireAdmin, async (req
   }
 });
 
+// Você precisa ADICIONAR este bloco no seu arquivo src/routes/index.ts
+// Insira após o endpoint /availability/quick e antes do export default router
+
 /**
  * @swagger
  * /api/availability/quick/{instanceId}/{days}:
@@ -1282,5 +1285,97 @@ router.get('/availability/quick/:instanceId/:days', authenticateToken, requireAd
     res.status(400).json({ error: (error as Error).message });
   }
 });
+
+
+/**
+ * @swagger
+ * /api/availability/check-slot:
+ *   post:
+ *     tags: [Availability]
+ *     summary: Check specific time slot availability
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               instance_id:
+ *                 type: string
+ *                 format: uuid
+ *                 description: ID da instância
+ *               service_id:
+ *                 type: string
+ *                 format: uuid
+ *                 description: ID do serviço
+ *               start_datetime:
+ *                 type: string
+ *                 format: date-time
+ *                 description: Hora inicial desejada (ISO format)
+ *               calendar_ids:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                   format: uuid
+ *                 description: IDs dos calendários específicos (opcional - se omitido, verifica todos)
+ *             required:
+ *               - instance_id
+ *               - service_id
+ *               - start_datetime
+ *     responses:
+ *       200:
+ *         description: Slot availability result
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 available:
+ *                   type: boolean
+ *                   description: Se o horário está disponível
+ *                 service_name:
+ *                   type: string
+ *                   description: Nome do serviço
+ *                 start_datetime:
+ *                   type: string
+ *                   format: date-time
+ *                   description: Hora inicial
+ *                 end_datetime:
+ *                   type: string
+ *                   format: date-time
+ *                   description: Hora final calculada
+ *                 calendar_name:
+ *                   type: string
+ *                   description: Nome do calendário
+ *                 conflict_reason:
+ *                   type: string
+ *                   nullable: true
+ *                   description: Motivo do conflito se indisponível
+ */
+router.post('/availability/check-slot', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { instance_id, service_id, start_datetime, calendar_ids } = req.body;
+    
+    if (!instance_id || !service_id || !start_datetime) {
+      return res.status(400).json({ 
+        error: 'instance_id, service_id e start_datetime são obrigatórios' 
+      });
+    }
+
+    const result = await availabilityService.checkSpecificSlot({
+      instance_id,
+      service_id, 
+      start_datetime,
+      calendar_ids
+    });
+    
+    res.json(result);
+  } catch (error) {
+    res.status(400).json({ error: (error as Error).message });
+  }
+});
+
 
 export default router;

@@ -33,7 +33,8 @@ const PORT = process.env.PORT || 3010;
 // Security middleware
 app.use(helmet());
 app.use(cors({
-  origin: process.env.NODE_ENV === 'production' ? 'https://yourdomain.com' : '*',
+   origin: process.env.NODE_ENV === 'production' ? 'https://calendar.armtexai.org' : '*',
+  //origin:  '*',
   credentials: true
 }));
 

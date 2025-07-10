@@ -122,3 +122,20 @@ export interface PreferenceOptions {
   avoid_times?: string[];
   max_suggestions?: number;
 }
+// Interfaces para o novo método checkSpecificSlot
+export interface SlotCheckRequest {
+  instance_id: string;
+  service_id: string;
+  start_datetime: string;
+  calendar_ids?: string[]; // Opcional - se não fornecido, usa todos os calendários
+}
+
+export interface SlotCheckResponse {
+  available: boolean;
+  service_name: string;
+  start_datetime: string;
+  end_datetime: string;
+  calendar_id: string;
+  calendar_name: string;
+  conflict_reason?: string;
+}
