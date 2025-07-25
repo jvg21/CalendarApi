@@ -1,11 +1,16 @@
-// src/service/appointment.ts - Adaptado para calendário principal compartilhado
-
 import { addMinutes, parseISO } from 'date-fns';
 import { supabase } from '../config/supabase';
 import { CreateAppointmentRequest, Appointment } from '../types';
 import { calendar } from '../config/google_calendar';
+import { AvailabilityService } from './availability'; // NOVO: Import do serviço de disponibilidade
 
 export class AppointmentService {
+  // NOVO: Instância do serviço de disponibilidade
+  private availabilityService: AvailabilityService;
+
+  constructor() {
+    this.availabilityService = new AvailabilityService();
+  }
 
   async createAppointment(request: CreateAppointmentRequest): Promise<Appointment> {
     const {
@@ -71,6 +76,20 @@ export class AppointmentService {
       throw new Error('End time must be after start time');
     }
 
+    // NOVO: Verificar disponibilidade antes de criar agendamento
+    console.log('🔍 Checking availability before creating appointment...');
+    const availabilityCheck = await this.availabilityService.checkAvailability(
+      start_datetime,
+      service_id,
+      targetCalendar.id
+    );
+
+    if (!availabilityCheck.available) {
+      throw new Error(`Time slot not available: ${availabilityCheck.conflict_reason}`);
+    }
+
+    console.log('✅ Time slot confirmed as available');
+
     try {
       // Create event in client's shared calendar using your main calendar credentials
       const googleEvent = await this.createEventInSharedCalendar({
@@ -114,41 +133,12 @@ export class AppointmentService {
         throw new Error(`Failed to create appointment: ${error.message}`);
       }
 
+      console.log('✅ Appointment created successfully');
       return appointment;
 
     } catch (error) {
-      console.error('Error creating appointment:', error);
+      console.error('❌ Error creating appointment:', error);
       throw new Error(`Failed to create appointment: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
-
-  async deleteAppointment(id: string): Promise<void> {
-    const { data: appointment } = await supabase
-      .from('appointments')
-      .select('*, calendars(*)')
-      .eq('id', id)
-      .single();
-
-    if (!appointment) {
-      throw new Error('Appointment not found');
-    }
-
-    // Delete from Google Calendar if exists
-    if (appointment.google_event_id && appointment.calendars?.google_calendar_id) {
-      await this.deleteEventFromSharedCalendar(
-        appointment.calendars.google_calendar_id,
-        appointment.google_event_id
-      );
-    }
-
-    // Delete permanently from database
-    const { error } = await supabase
-      .from('appointments')
-      .delete()
-      .eq('id', id);
-
-    if (error) {
-      throw new Error(`Failed to delete appointment: ${error.message}`);
     }
   }
 
@@ -169,6 +159,25 @@ export class AppointmentService {
     if (updates.start_datetime && !updates.end_datetime) {
       const startTime = parseISO(updates.start_datetime);
       endTime = addMinutes(startTime, appointment.services.duration).toISOString();
+    }
+
+    // NOVO: Verificar disponibilidade se horário mudou
+    if (updates.start_datetime || updates.end_datetime) {
+      console.log('🔍 Checking availability for updated time...');
+      
+      const newStartTime = updates.start_datetime || appointment.start_datetime;
+      
+      const availabilityCheck = await this.availabilityService.checkAvailability(
+        newStartTime,
+        appointment.service_id,
+        appointment.calendar_id
+      );
+
+      if (!availabilityCheck.available) {
+        throw new Error(`Updated time slot not available: ${availabilityCheck.conflict_reason}`);
+      }
+
+      console.log('✅ Updated time slot confirmed as available');
     }
 
     // Update Google Calendar event if time/title changed
@@ -205,7 +214,40 @@ export class AppointmentService {
       throw new Error(`Failed to update appointment: ${error.message}`);
     }
 
+    console.log('✅ Appointment updated successfully');
     return updatedAppointment;
+  }
+
+  async deleteAppointment(id: string): Promise<void> {
+    const { data: appointment } = await supabase
+      .from('appointments')
+      .select('*, calendars(*)')
+      .eq('id', id)
+      .single();
+
+    if (!appointment) {
+      throw new Error('Appointment not found');
+    }
+
+    // Delete from Google Calendar if exists
+    if (appointment.google_event_id && appointment.calendars?.google_calendar_id) {
+      await this.deleteEventFromSharedCalendar(
+        appointment.calendars.google_calendar_id,
+        appointment.google_event_id
+      );
+    }
+
+    // Delete permanently from database
+    const { error } = await supabase
+      .from('appointments')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      throw new Error(`Failed to delete appointment: ${error.message}`);
+    }
+
+    console.log('✅ Appointment deleted successfully');
   }
 
   async cancelAppointment(id: string): Promise<void> {
@@ -230,61 +272,81 @@ export class AppointmentService {
       .from('appointments')
       .update({ status: 'cancelled', updated_at: new Date().toISOString() })
       .eq('id', id);
+
+    console.log('✅ Appointment cancelled successfully');
   }
 
-  // src/service/appointment.ts - Substituir método createEventInSharedCalendar
+  // NOVO: Método para verificar se agendamento existente não está em conflito
+  async validateExistingAppointment(appointmentId: string): Promise<boolean> {
+    const { data: appointment } = await supabase
+      .from('appointments')
+      .select('*, calendars(*)')
+      .eq('id', appointmentId)
+      .single();
 
-private async createEventInSharedCalendar(eventData: any) {
-  // Função para converter Date para string local São Paulo sem timezone
-  const toLocalDateTime = (date: Date) => {
-    // Assumir que a data recebida já está no timezone correto
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    const hours = String(date.getHours()).padStart(2, '0');
-    const minutes = String(date.getMinutes()).padStart(2, '0');
-    const seconds = String(date.getSeconds()).padStart(2, '0');
-    
-    return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
-  };
+    if (!appointment) {
+      return false;
+    }
 
-  const event = {
-    summary: eventData.summary,
-    description: eventData.description,
-    start: {
-      dateTime: toLocalDateTime(eventData.start),
-      timeZone: 'America/Sao_Paulo',
-    },
-    end: {
-      dateTime: toLocalDateTime(eventData.end),
-      timeZone: 'America/Sao_Paulo',
-    },
-    attendees: eventData.attendees,
-    // Google Meet automático
-    conferenceData: {
-      createRequest: {
-        requestId: `meet-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-        conferenceSolutionKey: {
-          type: 'hangoutsMeet'
+    const availabilityCheck = await this.availabilityService.checkAvailability(
+      appointment.start_datetime,
+      appointment.service_id,
+      appointment.calendar_id
+    );
+
+    return availabilityCheck.available;
+  }
+
+  private async createEventInSharedCalendar(eventData: any) {
+    // Função para converter Date para string local São Paulo sem timezone
+    const toLocalDateTime = (date: Date) => {
+      // Assumir que a data recebida já está no timezone correto
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      const hours = String(date.getHours()).padStart(2, '0');
+      const minutes = String(date.getMinutes()).padStart(2, '0');
+      const seconds = String(date.getSeconds()).padStart(2, '0');
+      
+      return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
+    };
+
+    const event = {
+      summary: eventData.summary,
+      description: eventData.description,
+      start: {
+        dateTime: toLocalDateTime(eventData.start),
+        timeZone: 'America/Sao_Paulo',
+      },
+      end: {
+        dateTime: toLocalDateTime(eventData.end),
+        timeZone: 'America/Sao_Paulo',
+      },
+      attendees: eventData.attendees,
+      // Google Meet automático
+      conferenceData: {
+        createRequest: {
+          requestId: `meet-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          conferenceSolutionKey: {
+            type: 'hangoutsMeet'
+          }
         }
-      }
-    },
-    // Configurações de acesso
-    guestsCanModify: false,
-    guestsCanInviteOthers: false,
-    guestsCanSeeOtherGuests: true,
-  };
+      },
+      // Configurações de acesso
+      guestsCanModify: false,
+      guestsCanInviteOthers: false,
+      guestsCanSeeOtherGuests: true,
+    };
 
-  const response = await calendar.events.insert({
-    calendarId: eventData.targetCalendarId,
-    requestBody: event,
-    conferenceDataVersion: 1,
-    sendUpdates: 'all'
-  });
+    const response = await calendar.events.insert({
+      calendarId: eventData.targetCalendarId,
+      requestBody: event,
+      conferenceDataVersion: 1,
+      sendUpdates: 'all'
+    });
 
-  return response.data;
-}
-
+    return response.data;
+  }
 
   private async updateEventInSharedCalendar(calendarId: string, eventId: string, updates: any) {
     const event = {
