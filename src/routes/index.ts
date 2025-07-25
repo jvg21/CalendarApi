@@ -4,48 +4,14 @@ import { authenticateToken, requireAdmin } from '../middleware/auth';
 import { AvailabilityService } from '../service/availability';
 import { AppointmentService } from '../service/appointment';
 
+// Import das definições do Swagger
+import '../docs/swagger-definitions';
+
 const router = express.Router();
 const availabilityService = new AvailabilityService();
 const appointmentService = new AppointmentService();
 
-/**
- * @swagger
- * /api/auth/login:
- *   post:
- *     tags: [Authentication]
- *     summary: Admin login
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required: [email, password]
- *             properties:
- *               email:
- *                 type: string
- *                 format: email
- *               password:
- *                 type: string
- *     responses:
- *       200:
- *         description: Login successful
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 user:
- *                   $ref: '#/components/schemas/User'
- *                 token:
- *                   type: string
- *       400:
- *         description: Invalid credentials
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
- */
+// Authentication Routes
 router.post('/auth/login', async (req, res) => {
   const { email, password } = req.body;
   
@@ -62,59 +28,12 @@ router.post('/auth/login', async (req, res) => {
   res.json({ user: data.user, token: data.session?.access_token });
 });
 
-/**
- * @swagger
- * /api/auth/logout:
- *   post:
- *     tags: [Authentication]
- *     summary: Logout
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: Logout successful
- */
 router.post('/auth/logout', authenticateToken, async (req, res) => {
   await supabase.auth.signOut();
   res.json({ message: 'Logged out successfully' });
 });
 
-/**
- * @swagger
- * /api/instances:
- *   get:
- *     tags: [Instances]
- *     summary: Get all instances
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: List of instances
- *         content:
- *           application/json:
- *             schema:
- *               type: array
- *               items:
- *                 $ref: '#/components/schemas/Instance'
- *   post:
- *     tags: [Instances]
- *     summary: Create new instance
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/Instance'
- *     responses:
- *       200:
- *         description: Instance created
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Instance'
- */
+// Instance Routes
 router.get('/instances', authenticateToken, requireAdmin, async (req, res) => {
   const { data, error } = await supabase
     .from('instances')
@@ -144,50 +63,6 @@ router.post('/instances', authenticateToken, requireAdmin, async (req, res) => {
   res.json(data);
 });
 
-/**
- * @swagger
- * /api/instances/{id}:
- *   put:
- *     tags: [Instances]
- *     summary: Update instance
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *           format: uuid
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/Instance'
- *     responses:
- *       200:
- *         description: Instance updated
- *   delete:
- *     tags: [Instances]
- *     summary: Delete instance
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *           format: uuid
- *     responses:
- *       200:
- *         description: Instance deleted successfully
- *       404:
- *         description: Instance not found
- *       400:
- *         description: Cannot delete instance with existing appointments
- */
 router.put('/instances/:id', authenticateToken, requireAdmin, async (req, res) => {
   const { data, error } = await supabase
     .from('instances')
@@ -249,52 +124,7 @@ router.delete('/instances/:id', authenticateToken, requireAdmin, async (req, res
   }
 });
 
-/**
- * @swagger
- * /api/instances/{instanceId}/calendars:
- *   get:
- *     tags: [Calendars]
- *     summary: Get instance calendars
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: instanceId
- *         required: true
- *         schema:
- *           type: string
- *           format: uuid
- *     responses:
- *       200:
- *         description: List of calendars
- *         content:
- *           application/json:
- *             schema:
- *               type: array
- *               items:
- *                 $ref: '#/components/schemas/Calendar'
- *   post:
- *     tags: [Calendars]
- *     summary: Create calendar
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: instanceId
- *         required: true
- *         schema:
- *           type: string
- *           format: uuid
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/Calendar'
- *     responses:
- *       200:
- *         description: Calendar created
- */
+// Instance-specific Calendar Routes
 router.get('/instances/:instanceId/calendars', authenticateToken, requireAdmin, async (req, res) => {
   const { data, error } = await supabase
     .from('calendars')
@@ -325,52 +155,7 @@ router.post('/instances/:instanceId/calendars', authenticateToken, requireAdmin,
   res.json(data);
 });
 
-/**
- * @swagger
- * /api/instances/{instanceId}/services:
- *   get:
- *     tags: [Services]
- *     summary: Get instance services
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: instanceId
- *         required: true
- *         schema:
- *           type: string
- *           format: uuid
- *     responses:
- *       200:
- *         description: List of services
- *         content:
- *           application/json:
- *             schema:
- *               type: array
- *               items:
- *                 $ref: '#/components/schemas/Service'
- *   post:
- *     tags: [Services]
- *     summary: Create service
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: instanceId
- *         required: true
- *         schema:
- *           type: string
- *           format: uuid
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/Service'
- *     responses:
- *       200:
- *         description: Service created
- */
+// Instance-specific Service Routes
 router.get('/instances/:instanceId/services', authenticateToken, requireAdmin, async (req, res) => {
   const { data, error } = await supabase
     .from('services')
@@ -402,36 +187,7 @@ router.post('/instances/:instanceId/services', authenticateToken, requireAdmin, 
   res.json(data);
 });
 
-/**
- * @swagger
- * /api/calendars:
- *   get:
- *     tags: [Calendars]
- *     summary: Get all calendars
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: query
- *         name: instance_id
- *         schema:
- *           type: string
- *           format: uuid
- *         description: Filter by instance ID (optional)
- *       - in: query
- *         name: is_active
- *         schema:
- *           type: boolean
- *         description: Filter by active status (optional)
- *     responses:
- *       200:
- *         description: List of all calendars
- *         content:
- *           application/json:
- *             schema:
- *               type: array
- *               items:
- *                 $ref: '#/components/schemas/Calendar'
- */
+// Global Calendar Routes
 router.get('/calendars', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { instance_id, is_active } = req.query;
@@ -465,71 +221,6 @@ router.get('/calendars', authenticateToken, requireAdmin, async (req, res) => {
   }
 });
 
-/**
- * @swagger
- * /api/calendars/{id}:
- *   get:
- *     tags: [Calendars]
- *     summary: Get calendar by ID
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *           format: uuid
- *     responses:
- *       200:
- *         description: Calendar details
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Calendar'
- *       404:
- *         description: Calendar not found
- *   put:
- *     tags: [Calendars]
- *     summary: Update calendar
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *           format: uuid
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/Calendar'
- *     responses:
- *       200:
- *         description: Calendar updated
- *       404:
- *         description: Calendar not found
- *   delete:
- *     tags: [Calendars]
- *     summary: Delete calendar
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *           format: uuid
- *     responses:
- *       200:
- *         description: Calendar deleted
- *       404:
- *         description: Calendar not found
- */
 router.get('/calendars/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -604,41 +295,7 @@ router.delete('/calendars/:id', authenticateToken, requireAdmin, async (req, res
   }
 });
 
-/**
- * @swagger
- * /api/services:
- *   get:
- *     tags: [Services]
- *     summary: Get all services
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: query
- *         name: instance_id
- *         schema:
- *           type: string
- *           format: uuid
- *         description: Filter by instance ID (optional)
- *       - in: query
- *         name: is_active
- *         schema:
- *           type: boolean
- *         description: Filter by active status (optional)
- *       - in: query
- *         name: category
- *         schema:
- *           type: string
- *         description: Filter by category (optional)
- *     responses:
- *       200:
- *         description: List of all services
- *         content:
- *           application/json:
- *             schema:
- *               type: array
- *               items:
- *                 $ref: '#/components/schemas/Service'
- */
+// Global Service Routes
 router.get('/services', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { instance_id, is_active, category } = req.query;
@@ -676,71 +333,6 @@ router.get('/services', authenticateToken, requireAdmin, async (req, res) => {
   }
 });
 
-/**
- * @swagger
- * /api/services/{id}:
- *   get:
- *     tags: [Services]
- *     summary: Get service by ID
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *           format: uuid
- *     responses:
- *       200:
- *         description: Service details
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Service'
- *       404:
- *         description: Service not found
- *   put:
- *     tags: [Services]
- *     summary: Update service
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *           format: uuid
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/Service'
- *     responses:
- *       200:
- *         description: Service updated
- *       404:
- *         description: Service not found
- *   delete:
- *     tags: [Services]
- *     summary: Delete service
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *           format: uuid
- *     responses:
- *       200:
- *         description: Service deleted
- *       404:
- *         description: Service not found
- */
 router.get('/services/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -815,24 +407,6 @@ router.delete('/services/:id', authenticateToken, requireAdmin, async (req, res)
   }
 });
 
-/**
- * @swagger
- * /api/services/categories:
- *   get:
- *     tags: [Services]
- *     summary: Get service categories
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: List of service categories
- *         content:
- *           application/json:
- *             schema:
- *               type: array
- *               items:
- *                 type: string
- */
 router.get('/services/categories', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -854,123 +428,7 @@ router.get('/services/categories', authenticateToken, requireAdmin, async (req, 
   }
 });
 
-/**
- * @swagger
- * /api/appointments:
- *   post:
- *     tags: [Appointments]
- *     summary: Create appointment
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required: [instance_id, service_id, start_datetime, client_name]
- *             properties:
- *               instance_id:
- *                 type: string
- *                 format: uuid
- *               service_id:
- *                 type: string
- *                 format: uuid
- *               start_datetime:
- *                 type: string
- *                 format: date-time
- *               end_datetime:
- *                 type: string
- *                 format: date-time
- *                 description: Optional - will be calculated based on service duration if not provided
- *               client_name:
- *                 type: string
- *               client_email:
- *                 type: string
- *                 format: email
- *               client_phone:
- *                 type: string
- *               description:
- *                 type: string
- *               calendar_id:
- *                 type: string
- *                 format: uuid
- *                 description: Optional - will use highest priority calendar if not provided
- *               flow_id:
- *                 type: integer
- *                 description: ID do fluxo de agendamento
- *               agent_id:
- *                 type: integer  
- *                 description: ID do agente responsável
- *               user_id:
- *                 type: integer
- *                 description: ID do usuário que criou o agendamento
- *     responses:
- *       200:
- *         description: Appointment created
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Appointment'
- *       400:
- *         description: Bad request - validation error
- *       404:
- *         description: Service or calendar not found
- *   get:
- *     tags: [Appointments]
- *     summary: Get appointments with filters
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: query
- *         name: instance_id
- *         schema:
- *           type: string
- *           format: uuid
- *         description: Filter by instance ID
- *       - in: query
- *         name: start_date
- *         schema:
- *           type: string
- *           format: date-time
- *         description: Filter appointments from this date
- *       - in: query
- *         name: end_date
- *         schema:
- *           type: string
- *           format: date-time
- *         description: Filter appointments until this date
- *       - in: query
- *         name: status
- *         schema:
- *           type: string
- *           enum: [scheduled, confirmed, cancelled, completed]
- *         description: Filter by appointment status
- *       - in: query
- *         name: flow_id
- *         schema:
- *           type: integer
- *         description: Filter by flow ID
- *       - in: query
- *         name: agent_id
- *         schema:
- *           type: integer
- *         description: Filter by agent ID
- *       - in: query
- *         name: user_id
- *         schema:
- *           type: integer
- *         description: Filter by user ID
- *     responses:
- *       200:
- *         description: List of appointments
- *         content:
- *           application/json:
- *             schema:
- *               type: array
- *               items:
- *                 $ref: '#/components/schemas/Appointment'
- */
+// Appointment Routes
 router.post('/appointments', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const appointment = await appointmentService.createAppointment(req.body);
@@ -986,7 +444,6 @@ router.get('/appointments', authenticateToken, requireAdmin, async (req, res) =>
     start_date, 
     end_date, 
     status,
-    // NOVOS FILTROS ADICIONADOS
     flow_id,
     agent_id,
     user_id
@@ -1002,13 +459,11 @@ router.get('/appointments', authenticateToken, requireAdmin, async (req, res) =>
     `)
     .order('start_datetime');
 
-  // Filtros existentes
+  // Apply filters
   if (instance_id) query = query.eq('instance_id', instance_id);
   if (start_date) query = query.gte('start_datetime', start_date);
   if (end_date) query = query.lte('start_datetime', end_date);
   if (status) query = query.eq('status', status);
-
-  // NOVOS FILTROS ADICIONADOS
   if (flow_id) query = query.eq('flow_id', parseInt(flow_id as string));
   if (agent_id) query = query.eq('agent_id', parseInt(agent_id as string));
   if (user_id) query = query.eq('user_id', parseInt(user_id as string));
@@ -1023,46 +478,6 @@ router.get('/appointments', authenticateToken, requireAdmin, async (req, res) =>
   res.json(data);
 });
 
-/**
- * @swagger
- * /api/appointments/{id}:
- *   put:
- *     tags: [Appointments]
- *     summary: Update appointment
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *           format: uuid
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/Appointment'
- *     responses:
- *       200:
- *         description: Appointment updated
- *   delete:
- *     tags: [Appointments]
- *     summary: Cancel appointment
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *           format: uuid
- *     responses:
- *       200:
- *         description: Appointment cancelled
- */
 router.put('/appointments/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
     const appointment = await appointmentService.updateAppointment(req.params.id, req.body);
@@ -1081,38 +496,6 @@ router.delete('/appointments/:id', authenticateToken, requireAdmin, async (req, 
   }
 });
 
-/**
- * @swagger
- * /api/appointments/{id}/delete:
- *   delete:
- *     tags: [Appointments]
- *     summary: Delete appointment permanently
- *     description: Permanently deletes an appointment from database and Google Calendar
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *           format: uuid
- *     responses:
- *       200:
- *         description: Appointment deleted permanently
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 message:
- *                   type: string
- *                   example: "Appointment deleted permanently"
- *       404:
- *         description: Appointment not found
- *       400:
- *         description: Bad request
- */
 router.delete('/appointments/:id/delete', authenticateToken, requireAdmin, async (req, res) => {
   try {
     await appointmentService.deleteAppointment(req.params.id);
@@ -1126,256 +509,7 @@ router.delete('/appointments/:id/delete', authenticateToken, requireAdmin, async
   }
 });
 
-/**
- * @swagger
- * /api/availability/check:
- *   post:
- *     tags: [Availability]
- *     summary: Check availability
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/AvailabilityRequest'
- *     responses:
- *       200:
- *         description: Available time slots
- *         content:
- *           application/json:
- *             schema:
- *               type: array
- *               items:
- *                 $ref: '#/components/schemas/TimeSlot'
- */
-router.post('/availability/check', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const slots = await availabilityService.getAvailableSlots(req.body);
-    res.json(slots);
-  } catch (error) {
-    res.status(400).json({ error: (error as Error).message });
-  }
-});
 
-/**
- * @swagger
- * /api/availability/suggest:
- *   post:
- *     tags: [Availability]
- *     summary: Suggest best time slots
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               availability_request:
- *                 $ref: '#/components/schemas/AvailabilityRequest'
- *               preferences:
- *                 $ref: '#/components/schemas/PreferenceOptions'
- *     responses:
- *       200:
- *         description: Suggested time slots
- *         content:
- *           application/json:
- *             schema:
- *               type: array
- *               items:
- *                 $ref: '#/components/schemas/TimeSlot'
- */
-router.post('/availability/suggest', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const { availability_request, preferences } = req.body;
-    const slots = await availabilityService.getAvailableSlots(availability_request);
-    const suggestions = availabilityService.suggestBestSlots(slots, preferences);
-    res.json(suggestions);
-  } catch (error) {
-    res.status(400).json({ error: (error as Error).message });
-  }
-});
-
-// Você precisa ADICIONAR este bloco no seu arquivo src/routes/index.ts
-// Insira após o endpoint /availability/quick e antes do export default router
-
-/**
- * @swagger
- * /api/availability/quick/{instanceId}/{days}:
- *   get:
- *     tags: [Availability]
- *     summary: Quick availability check
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: instanceId
- *         required: true
- *         schema:
- *           type: string
- *           format: uuid
- *       - in: path
- *         name: days
- *         required: true
- *         schema:
- *           type: integer
- *           minimum: 1
- *         description: Number of days to check availability
- *       - in: query
- *         name: service_id
- *         required: true
- *         schema:
- *           type: string
- *           format: uuid
- *     responses:
- *       200:
- *         description: Availability summary
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 summary:
- *                   type: object
- *                   properties:
- *                     total_slots:
- *                       type: integer
- *                     days_checked:
- *                       type: integer
- *                     first_available:
- *                       type: string
- *                       format: date-time
- *                       nullable: true
- *                     by_calendar:
- *                       type: object
- *                 slots:
- *                   type: array
- *                   items:
- *                     $ref: '#/components/schemas/TimeSlot'
- */
-router.get('/availability/quick/:instanceId/:days', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const { instanceId, days } = req.params;
-    const today = new Date();
-    const endDate = new Date();
-    endDate.setDate(today.getDate() + parseInt(days));
-
-    const slots = await availabilityService.getAvailableSlots({
-      instance_id: instanceId,
-      service_id: req.query.service_id as string,
-      start_date: today.toISOString().split('T')[0],
-      end_date: endDate.toISOString().split('T')[0]
-    });
-
-    const summary = {
-      total_slots: slots.length,
-      days_checked: parseInt(days),
-      first_available: slots[0]?.start_datetime || null,
-      by_calendar: slots.reduce((acc, slot) => {
-        acc[slot.calendar_name] = (acc[slot.calendar_name] || 0) + 1;
-        return acc;
-      }, {} as Record<string, number>)
-    };
-
-    res.json({ summary, slots: slots.slice(0, 20) }); // Return first 20 slots
-  } catch (error) {
-    res.status(400).json({ error: (error as Error).message });
-  }
-});
-
-
-/**
- * @swagger
- * /api/availability/check-slot:
- *   post:
- *     tags: [Availability]
- *     summary: Check specific time slot availability
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               instance_id:
- *                 type: string
- *                 format: uuid
- *                 description: ID da instância
- *               service_id:
- *                 type: string
- *                 format: uuid
- *                 description: ID do serviço
- *               start_datetime:
- *                 type: string
- *                 format: date-time
- *                 description: Hora inicial desejada (ISO format)
- *               calendar_ids:
- *                 type: array
- *                 items:
- *                   type: string
- *                   format: uuid
- *                 description: IDs dos calendários específicos (opcional - se omitido, verifica todos)
- *             required:
- *               - instance_id
- *               - service_id
- *               - start_datetime
- *     responses:
- *       200:
- *         description: Slot availability result
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 available:
- *                   type: boolean
- *                   description: Se o horário está disponível
- *                 service_name:
- *                   type: string
- *                   description: Nome do serviço
- *                 start_datetime:
- *                   type: string
- *                   format: date-time
- *                   description: Hora inicial
- *                 end_datetime:
- *                   type: string
- *                   format: date-time
- *                   description: Hora final calculada
- *                 calendar_name:
- *                   type: string
- *                   description: Nome do calendário
- *                 conflict_reason:
- *                   type: string
- *                   nullable: true
- *                   description: Motivo do conflito se indisponível
- */
-router.post('/availability/check-slot', authenticateToken, requireAdmin, async (req, res) => {
-  try {
-    const { instance_id, service_id, start_datetime, calendar_ids } = req.body;
-    
-    if (!instance_id || !service_id || !start_datetime) {
-      return res.status(400).json({ 
-        error: 'instance_id, service_id e start_datetime são obrigatórios' 
-      });
-    }
-
-    const result = await availabilityService.checkSpecificSlot({
-      instance_id,
-      service_id, 
-      start_datetime,
-      calendar_ids
-    });
-    
-    res.json(result);
-  } catch (error) {
-    res.status(400).json({ error: (error as Error).message });
-  }
-});
 
 
 export default router;

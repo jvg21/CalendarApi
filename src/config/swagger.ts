@@ -122,8 +122,6 @@ const options = {
                             enum: ['scheduled', 'confirmed', 'cancelled', 'completed'],
                             default: 'scheduled'
                         },
-
-                        // NOVOS CAMPOS ADICIONADOS
                         flow_id: {
                             type: 'integer',
                             description: 'ID do fluxo de agendamento'
@@ -136,31 +134,10 @@ const options = {
                             type: 'integer',
                             description: 'ID do usuário que criou o agendamento'
                         },
-
                         created_at: { type: 'string', format: 'date-time' },
                         updated_at: { type: 'string', format: 'date-time' },
                     },
                     required: ['instance_id', 'service_id', 'start_datetime', 'client_name'],
-                },
-
-                PreferenceOptions: {
-                    type: 'object',
-                    properties: {
-                        strategy: {
-                            type: 'string',
-                            enum: ['earliest', 'latest', 'least_fragmented', 'priority_calendar']
-                        },
-                        preferred_times: {
-                            type: 'array',
-                            items: { type: 'string', pattern: '^\\d{2}:\\d{2}$' }
-                        },
-                        avoid_times: {
-                            type: 'array',
-                            items: { type: 'string', pattern: '^\\d{2}:\\d{2}$' }
-                        },
-                        max_suggestions: { type: 'integer', minimum: 1, maximum: 50, default: 10 },
-                    },
-                    required: ['strategy'],
                 },
                 Error: {
                     type: 'object',
@@ -185,8 +162,8 @@ const options = {
         ],
     },
     apis: process.env.NODE_ENV === 'production'
-        ? ['./dist/routes/*.js', './dist/server.js']
-        : ['./src/routes/*.ts', './src/server.ts'],
+        ? ['./dist/docs/*.js', './dist/routes/*.js', './dist/server.js']
+        : ['./src/docs/*.ts', './src/routes/*.ts', './src/server.ts'],
 };
 
 export const specs = swaggerJsdoc(options);
