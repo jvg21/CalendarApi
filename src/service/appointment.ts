@@ -232,47 +232,58 @@ export class AppointmentService {
       .eq('id', id);
   }
 
-  // Private methods for shared calendar management
+  // src/service/appointment.ts - Substituir método createEventInSharedCalendar
 
-  private async createEventInSharedCalendar(eventData: any) {
-    const event = {
-      summary: eventData.summary,
-      description: eventData.description,
-      start: {
-        dateTime: eventData.start.toISOString(),
-        timeZone: 'America/Sao_Paulo',
-      },
-      end: {
-        dateTime: eventData.end.toISOString(),
-        timeZone: 'America/Sao_Paulo',
-      },
-      attendees: eventData.attendees,
-      // Google Meet automático
-      conferenceData: {
-        createRequest: {
-          requestId: `meet-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-          conferenceSolutionKey: {
-            type: 'hangoutsMeet'
-          }
+private async createEventInSharedCalendar(eventData: any) {
+  // Função para converter Date para string local São Paulo sem timezone
+  const toLocalDateTime = (date: Date) => {
+    // Assumir que a data recebida já está no timezone correto
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    const seconds = String(date.getSeconds()).padStart(2, '0');
+    
+    return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
+  };
+
+  const event = {
+    summary: eventData.summary,
+    description: eventData.description,
+    start: {
+      dateTime: toLocalDateTime(eventData.start),
+      timeZone: 'America/Sao_Paulo',
+    },
+    end: {
+      dateTime: toLocalDateTime(eventData.end),
+      timeZone: 'America/Sao_Paulo',
+    },
+    attendees: eventData.attendees,
+    // Google Meet automático
+    conferenceData: {
+      createRequest: {
+        requestId: `meet-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        conferenceSolutionKey: {
+          type: 'hangoutsMeet'
         }
-      },
-      // Configurações de acesso
-      guestsCanModify: false,
-      guestsCanInviteOthers: false,
-      guestsCanSeeOtherGuests: true,
-    };
+      }
+    },
+    // Configurações de acesso
+    guestsCanModify: false,
+    guestsCanInviteOthers: false,
+    guestsCanSeeOtherGuests: true,
+  };
 
-    const response = await calendar.events.insert({
-      calendarId: eventData.targetCalendarId,
-      requestBody: event,
-      conferenceDataVersion: 1, // Necessário para criar Meet
-      sendUpdates: 'all'
-    });
+  const response = await calendar.events.insert({
+    calendarId: eventData.targetCalendarId,
+    requestBody: event,
+    conferenceDataVersion: 1,
+    sendUpdates: 'all'
+  });
 
-    return response.data;
-  }
-
-
+  return response.data;
+}
 
 
   private async updateEventInSharedCalendar(calendarId: string, eventId: string, updates: any) {

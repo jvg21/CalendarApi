@@ -509,7 +509,83 @@ router.delete('/appointments/:id/delete', authenticateToken, requireAdmin, async
   }
 });
 
+// Availability Routes
+router.post('/availability/check', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { start_datetime, service_id, calendar_id } = req.body;
+    
+    if (!start_datetime || !service_id || !calendar_id) {
+      res.status(400).json({ 
+        error: 'start_datetime, service_id, and calendar_id are required' 
+      });
+      return;
+    }
 
+    const isAvailable = await availabilityService.checkAvailability(
+      start_datetime,
+      service_id,
+      calendar_id
+    );
 
+    res.json({ 
+      available: isAvailable,
+      start_datetime,
+      service_id,
+      calendar_id
+    });
+  } catch (error) {
+    res.status(400).json({ error: (error as Error).message });
+  }
+});
+
+router.post('/availability/suggest', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { 
+      start_datetime, 
+      end_datetime, 
+      service_id, 
+      calendar_ids,
+      max_results = 10,
+      expand_timeframe = false,
+      interval_minutes = 30,
+      strategy = 'priority'
+    } = req.body;
+    
+    if (!start_datetime || !end_datetime || !service_id || !calendar_ids || !Array.isArray(calendar_ids)) {
+      res.status(400).json({ 
+        error: 'start_datetime, end_datetime, service_id, and calendar_ids (array) are required' 
+      });
+      return;
+    }
+
+    const suggestions = await availabilityService.suggestAvailability(
+      start_datetime,
+      end_datetime,
+      service_id,
+      calendar_ids,
+      max_results,
+      expand_timeframe,
+      interval_minutes,
+      strategy
+    );
+
+    res.json({ 
+      suggestions,
+      total_found: suggestions.length,
+      search_params: {
+        start_datetime,
+        end_datetime,
+        service_id,
+        calendar_ids,
+        max_results,
+        expand_timeframe,
+        interval_minutes,
+        strategy
+      }
+    });
+  } catch (error) {
+    res.status(400).json({ error: (error as Error).message });
+  }
+});
 
 export default router;
