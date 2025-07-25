@@ -195,8 +195,10 @@ export class AvailabilityService {
         throw new Error('Instance not found');
       }
 
-      let searchStartDate = parseISO(startDatetime);
-      let searchEndDate = parseISO(endDatetime);
+      // CORREÇÃO: Usar DateTime para preservar timezone
+      const originalTimezone = this.extractTimezone(startDatetime);
+      let searchStartDate = DateTime.fromISO(startDatetime, { setZone: true });
+      let searchEndDate = DateTime.fromISO(endDatetime, { setZone: true });
       let availableSlots: AvailabilitySlot[] = [];
       let attempts = 0;
       const maxAttempts = 30; // Evitar loop infinito
@@ -209,15 +211,16 @@ export class AvailabilityService {
           service.duration,
           intervalMinutes,
           instance.business_hours,
-          calendars
+          calendars,
+          originalTimezone // Passar timezone original
         );
 
         // Verificar disponibilidade de cada slot
         for (const slot of possibleSlots) {
           if (availableSlots.length >= maxResults) break;
 
-          const startTime = parseISO(slot.start_datetime);
-          const endTime = parseISO(slot.end_datetime);
+          const startTime = DateTime.fromISO(slot.start_datetime, { setZone: true }).toJSDate();
+          const endTime = DateTime.fromISO(slot.end_datetime, { setZone: true }).toJSDate();
           const totalStartTime = addMinutes(startTime, -service.buffer_before);
           const totalEndTime = addMinutes(endTime, service.buffer_after);
 
@@ -240,7 +243,7 @@ export class AvailabilityService {
 
         // Se não encontrou slots suficientes e deve expandir
         if (availableSlots.length < maxResults && expandTimeframe && attempts < maxAttempts) {
-          searchEndDate = addDays(searchEndDate, 1);
+          searchEndDate = searchEndDate.plus({ days: 1 });
           attempts++;
         } else {
           break;
@@ -255,6 +258,15 @@ export class AvailabilityService {
       console.error('Error suggesting availability:', error);
       return [];
     }
+  }
+
+  /**
+   * Extrai timezone da string ISO
+   */
+  private extractTimezone(isoString: string): string {
+    // Detecta timezone da string (ex: -03:00, +05:00, Z)
+    const timezoneMatch = isoString.match(/([+-]\d{2}:\d{2}|Z)$/);
+    return timezoneMatch ? timezoneMatch[1] : 'Z';
   }
 
   /**
@@ -311,15 +323,16 @@ export class AvailabilityService {
   }
 
   /**
-   * Gera slots de tempo possíveis
+   * Gera slots de tempo possíveis - CORRIGIDO para preservar timezone
    */
   private generateTimeSlots(
-    startDate: Date,
-    endDate: Date,
+    startDate: DateTime,
+    endDate: DateTime,
     durationMinutes: number,
     intervalMinutes: number,
     businessHours: any,
-    calendars: any[]
+    calendars: any[],
+    originalTimezone: string
   ): Array<{
     start_datetime: string;
     end_datetime: string;
@@ -329,57 +342,58 @@ export class AvailabilityService {
     google_calendar_id: string;
   }> {
     const slots: any[] = [];
-    let currentDate = new Date(startDate);
+    let currentDate = startDate.startOf('day');
 
     while (currentDate <= endDate) {
-      const dayName = format(currentDate, 'EEEE').toLowerCase();
+      const dayName = currentDate.toFormat('cccc').toLowerCase();
       const daySchedule = businessHours[dayName];
 
       if (daySchedule && daySchedule.enabled) {
         // Período da manhã
-        let morningStart = this.parseTimeToDate(currentDate, daySchedule.start_time);
+        let morningStart = this.parseTimeToDateTime(currentDate, daySchedule.start_time);
         let morningEnd = daySchedule.break_start 
-          ? this.parseTimeToDate(currentDate, daySchedule.break_start)
-          : this.parseTimeToDate(currentDate, daySchedule.end_time);
+          ? this.parseTimeToDateTime(currentDate, daySchedule.break_start)
+          : this.parseTimeToDateTime(currentDate, daySchedule.end_time);
 
-        this.addSlotsForPeriod(morningStart, morningEnd, durationMinutes, intervalMinutes, calendars, slots);
+        this.addSlotsForPeriod(morningStart, morningEnd, durationMinutes, intervalMinutes, calendars, slots, originalTimezone);
 
         // Período da tarde (se houver pausa)
         if (daySchedule.break_start && daySchedule.break_end) {
-          let afternoonStart = this.parseTimeToDate(currentDate, daySchedule.break_end);
-          let afternoonEnd = this.parseTimeToDate(currentDate, daySchedule.end_time);
+          let afternoonStart = this.parseTimeToDateTime(currentDate, daySchedule.break_end);
+          let afternoonEnd = this.parseTimeToDateTime(currentDate, daySchedule.end_time);
 
-          this.addSlotsForPeriod(afternoonStart, afternoonEnd, durationMinutes, intervalMinutes, calendars, slots);
+          this.addSlotsForPeriod(afternoonStart, afternoonEnd, durationMinutes, intervalMinutes, calendars, slots, originalTimezone);
         }
       }
 
-      currentDate = addDays(currentDate, 1);
+      currentDate = currentDate.plus({ days: 1 });
     }
 
     return slots;
   }
 
   /**
-   * Adiciona slots para um período específico
+   * Adiciona slots para um período específico - CORRIGIDO para preservar timezone
    */
   private addSlotsForPeriod(
-    periodStart: Date,
-    periodEnd: Date,
+    periodStart: DateTime,
+    periodEnd: DateTime,
     durationMinutes: number,
     intervalMinutes: number,
     calendars: any[],
-    slots: any[]
+    slots: any[],
+    originalTimezone: string
   ): void {
-    let currentTime = new Date(periodStart);
+    let currentTime = periodStart;
 
-    while (addMinutes(currentTime, durationMinutes) <= periodEnd) {
-      const endTime = addMinutes(currentTime, durationMinutes);
+    while (currentTime.plus({ minutes: durationMinutes }) <= periodEnd) {
+      const endTime = currentTime.plus({ minutes: durationMinutes });
 
       // Adicionar slot para cada calendário
       calendars.forEach(calendar => {
         slots.push({
-          start_datetime: currentTime.toISOString(),
-          end_datetime: endTime.toISOString(),
+          start_datetime: currentTime.toString(), // Preserva timezone original
+          end_datetime: endTime.toString(), // Preserva timezone original
           calendar_id: calendar.id,
           calendar_name: calendar.name,
           priority: calendar.priority,
@@ -387,18 +401,16 @@ export class AvailabilityService {
         });
       });
 
-      currentTime = addMinutes(currentTime, intervalMinutes);
+      currentTime = currentTime.plus({ minutes: intervalMinutes });
     }
   }
 
   /**
-   * Converte string de tempo para Date
+   * Converte string de tempo para DateTime - NOVO método usando Luxon
    */
-  private parseTimeToDate(date: Date, timeStr: string): Date {
+  private parseTimeToDateTime(date: DateTime, timeStr: string): DateTime {
     const [hours, minutes] = timeStr.split(':').map(Number);
-    const result = new Date(date);
-    result.setHours(hours, minutes, 0, 0);
-    return result;
+    return date.set({ hour: hours, minute: minutes, second: 0, millisecond: 0 });
   }
 
   /**
