@@ -24,7 +24,24 @@ export interface AvailabilityCheckResult {
   conflict_reason?: string;
 }
 
-export type AvailabilityStrategy = 'priority' | 'equality' | 'earliest' | 'nearest';
+// ATUALIZADO: Removido 'priority' das estratégias
+export type AvailabilityStrategy = 'equality' | 'earliest' | 'nearest' | 'time_blocks' | 'balanced_distribution';
+
+// NOVO: Interface para configuração de prioridade
+export interface PriorityConfig {
+  enabled: boolean;
+  order: 'asc' | 'desc'; // asc = menor prioridade primeiro, desc = maior prioridade primeiro
+}
+
+// NOVO: Interface para configuração de blocos de tempo
+export interface TimeBlocksConfig {
+  morning_slots?: number;   // Quantos slots da manhã retornar (padrão: 33% do total)
+  afternoon_slots?: number; // Quantos slots da tarde retornar (padrão: 33% do total)
+  evening_slots?: number;   // Quantos slots da noite retornar (padrão: 34% do total)
+  morning_start?: string;   // Início da manhã (padrão: "06:00")
+  afternoon_start?: string; // Início da tarde (padrão: "12:00")
+  evening_start?: string;   // Início da noite (padrão: "18:00")
+}
 
 export class AvailabilityService {
 
@@ -148,7 +165,7 @@ export class AvailabilityService {
   }
 
   /**
-   * Sugere horários disponíveis para agendamento
+   * Sugere horários disponíveis para agendamento - ATUALIZADO
    */
   async suggestAvailability(
     startDatetime: string,
@@ -158,7 +175,9 @@ export class AvailabilityService {
     maxResults: number = 10,
     expandTimeframe: boolean = false,
     intervalMinutes: number = 30,
-    strategy: AvailabilityStrategy = 'priority'
+    strategy: AvailabilityStrategy = 'earliest',
+    priorityConfig: PriorityConfig = { enabled: true, order: 'asc' },
+    timeBlocksConfig?: TimeBlocksConfig
   ): Promise<AvailabilitySlot[]> {
     try {
       // 1. Buscar dados do serviço
@@ -252,7 +271,7 @@ export class AvailabilityService {
       } while (availableSlots.length < maxResults && expandTimeframe && attempts < maxAttempts);
 
       // Aplicar estratégia de retorno
-      return this.applyStrategy(availableSlots, strategy, maxResults);
+      return this.applyStrategy(availableSlots, strategy, maxResults, priorityConfig, timeBlocksConfig);
 
     } catch (error) {
       console.error('Error suggesting availability:', error);
@@ -414,25 +433,18 @@ export class AvailabilityService {
   }
 
   /**
-   * Aplica estratégia de retorno
+   * Aplica estratégia de retorno - ATUALIZADO
    */
   private applyStrategy(
     slots: AvailabilitySlot[],
     strategy: AvailabilityStrategy,
-    maxResults: number
+    maxResults: number,
+    priorityConfig: PriorityConfig,
+    timeBlocksConfig?: TimeBlocksConfig
   ): AvailabilitySlot[] {
     let result: AvailabilitySlot[] = [];
 
     switch (strategy) {
-      case 'priority':
-        // Ordenar por prioridade e horário
-        slots.sort((a, b) => {
-          if (a.priority !== b.priority) return a.priority - b.priority;
-          return new Date(a.start_datetime).getTime() - new Date(b.start_datetime).getTime();
-        });
-        result = slots.slice(0, maxResults);
-        break;
-
       case 'equality':
         result = this.distributeEqually(slots, maxResults);
         break;
@@ -452,11 +464,160 @@ export class AvailabilityService {
         result = slots.slice(0, maxResults);
         break;
 
+      case 'time_blocks':
+        result = this.applyTimeBlocksStrategy(slots, maxResults, timeBlocksConfig);
+        break;
+
+      case 'balanced_distribution':
+        result = this.applyBalancedDistribution(slots, maxResults);
+        break;
+
       default:
         result = slots.slice(0, maxResults);
     }
 
+    // Aplicar configuração de prioridade se habilitada
+    if (priorityConfig.enabled) {
+      result = this.applyPriorityConfig(result, priorityConfig);
+    }
+
     return result;
+  }
+
+  /**
+   * NOVA: Estratégia de blocos de tempo
+   */
+  private applyTimeBlocksStrategy(
+    slots: AvailabilitySlot[],
+    maxResults: number,
+    config?: TimeBlocksConfig
+  ): AvailabilitySlot[] {
+    const defaultConfig: TimeBlocksConfig = {
+      morning_start: '06:00',
+      afternoon_start: '12:00',
+      evening_start: '18:00',
+      morning_slots: Math.floor(maxResults / 3),
+      afternoon_slots: Math.floor(maxResults / 3),
+      evening_slots: maxResults - (2 * Math.floor(maxResults / 3))
+    };
+
+    const finalConfig = { ...defaultConfig, ...config };
+
+    // Categorizar slots por período
+    const morningSlots: AvailabilitySlot[] = [];
+    const afternoonSlots: AvailabilitySlot[] = [];
+    const eveningSlots: AvailabilitySlot[] = [];
+
+    slots.forEach(slot => {
+      const slotTime = DateTime.fromISO(slot.start_datetime);
+      const timeStr = slotTime.toFormat('HH:mm');
+
+      if (timeStr >= finalConfig.morning_start! && timeStr < finalConfig.afternoon_start!) {
+        morningSlots.push(slot);
+      } else if (timeStr >= finalConfig.afternoon_start! && timeStr < finalConfig.evening_start!) {
+        afternoonSlots.push(slot);
+      } else if (timeStr >= finalConfig.evening_start!) {
+        eveningSlots.push(slot);
+      }
+    });
+
+    // Ordenar cada período por horário
+    const sortByTime = (a: AvailabilitySlot, b: AvailabilitySlot) => 
+      new Date(a.start_datetime).getTime() - new Date(b.start_datetime).getTime();
+
+    morningSlots.sort(sortByTime);
+    afternoonSlots.sort(sortByTime);
+    eveningSlots.sort(sortByTime);
+
+    // Selecionar slots de cada período
+    const result: AvailabilitySlot[] = [
+      ...morningSlots.slice(0, finalConfig.morning_slots),
+      ...afternoonSlots.slice(0, finalConfig.afternoon_slots),
+      ...eveningSlots.slice(0, finalConfig.evening_slots)
+    ];
+
+    // Ordenar resultado final por horário
+    return result.sort(sortByTime).slice(0, maxResults);
+  }
+
+  /**
+   * NOVA: Estratégia de distribuição balanceada
+   */
+  private applyBalancedDistribution(
+    slots: AvailabilitySlot[],
+    maxResults: number
+  ): AvailabilitySlot[] {
+    // Agrupar slots por dia
+    const dayGroups = new Map<string, AvailabilitySlot[]>();
+    
+    slots.forEach(slot => {
+      const day = DateTime.fromISO(slot.start_datetime).toFormat('yyyy-MM-dd');
+      if (!dayGroups.has(day)) {
+        dayGroups.set(day, []);
+      }
+      dayGroups.get(day)!.push(slot);
+    });
+
+    // Ordenar dias cronologicamente
+    const sortedDays = Array.from(dayGroups.keys()).sort();
+    const totalDays = sortedDays.length;
+    
+    if (totalDays === 0) return [];
+
+    // Calcular quantos slots por dia
+    const slotsPerDay = Math.floor(maxResults / totalDays);
+    const remainder = maxResults % totalDays;
+
+    const result: AvailabilitySlot[] = [];
+
+    // Distribuir slots por dia
+    sortedDays.forEach((day, index) => {
+      const daySlots = dayGroups.get(day)!;
+      const slotsToTake = slotsPerDay + (index < remainder ? 1 : 0);
+      
+      // Ordenar slots do dia por horário
+      daySlots.sort((a, b) => 
+        new Date(a.start_datetime).getTime() - new Date(b.start_datetime).getTime()
+      );
+      
+      // Se tem mais slots que o necessário, distribuir uniformemente
+      if (daySlots.length > slotsToTake && slotsToTake > 1) {
+        const interval = Math.floor(daySlots.length / slotsToTake);
+        for (let i = 0; i < slotsToTake; i++) {
+          const index = Math.min(i * interval, daySlots.length - 1);
+          result.push(daySlots[index]);
+        }
+      } else {
+        // Pegar os primeiros slots disponíveis
+        result.push(...daySlots.slice(0, slotsToTake));
+      }
+    });
+
+    // Ordenar resultado final por horário
+    return result.sort((a, b) => 
+      new Date(a.start_datetime).getTime() - new Date(b.start_datetime).getTime()
+    );
+  }
+
+  /**
+   * NOVO: Aplica configuração de prioridade
+   */
+  private applyPriorityConfig(
+    slots: AvailabilitySlot[],
+    config: PriorityConfig
+  ): AvailabilitySlot[] {
+    return slots.sort((a, b) => {
+      const priorityComparison = config.order === 'asc' 
+        ? a.priority - b.priority 
+        : b.priority - a.priority;
+      
+      // Se prioridades são iguais, manter ordem por horário
+      if (priorityComparison === 0) {
+        return new Date(a.start_datetime).getTime() - new Date(b.start_datetime).getTime();
+      }
+      
+      return priorityComparison;
+    });
   }
 
   /**
