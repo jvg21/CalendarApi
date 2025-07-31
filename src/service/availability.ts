@@ -1,10 +1,10 @@
-// src/service/availability.ts
+// src/service/availability.ts - COMPLETO COM CORREÇÃO FINAL
 
 import { addMinutes, parseISO, format, addDays, isAfter, isBefore, isWithinInterval } from 'date-fns';
 import { supabase } from '../config/supabase';
 import { calendar } from '../config/google_calendar';
 import { DateTime } from 'luxon';
-import { TimeSlot } from '../types';
+import { TimeSlot, SlotCheckResponse } from '../types';
 
 export interface AvailabilitySlot {
   start_datetime: string;
@@ -108,9 +108,8 @@ export class AvailabilityService {
       const endTime = startTime.plus({ minutes: service.duration });
       
       // Calcular horário total com buffers
-      const totalStartTime = startTime.minus({ minutes: service.buffer_before });
-      const totalEndTime = endTime.plus({ minutes: service.buffer_after });
-
+      const totalStartTime = startTime.minus({ minutes: service.buffer_before || 0 });
+      const totalEndTime = endTime.plus({ minutes: service.buffer_after || 0 });
 
       // Objeto base de resposta
       const baseResponse = {
@@ -160,6 +159,170 @@ export class AvailabilityService {
         service_name: 'Unknown',
         service_duration: 0,
         conflict_reason: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`
+      };
+    }
+  }
+
+  /**
+   * NOVO: Verifica disponibilidade em múltiplos calendários
+   */
+  async checkCalendarsAvailability(
+    startDatetime: string,
+    service_id: string,
+    calendarIds: string[]
+  ): Promise<SlotCheckResponse> {
+    try {
+      console.log(`🔍 Checking availability for ${calendarIds.length} calendars at ${startDatetime}`);
+
+      // 1. Buscar dados do serviço
+      const { data: service, error: serviceError } = await supabase
+        .from('services')
+        .select('name, duration, buffer_before, buffer_after')
+        .eq('id', service_id)
+        .single();
+
+      if (serviceError || !service) {
+        throw new Error('Service not found');
+      }
+
+      // 2. Buscar dados dos calendários
+      const { data: calendars, error: calendarsError } = await supabase
+        .from('calendars')
+        .select('id, name, google_calendar_id, priority, instance_id')
+        .in('id', calendarIds)
+        .eq('is_active', true);
+
+      if (calendarsError || !calendars || calendars.length === 0) {
+        throw new Error('No active calendars found');
+      }
+
+      const startTime = DateTime.fromISO(startDatetime, { setZone: true });
+      const endTime = startTime.plus({ minutes: service.duration });
+      
+      // Calcular horário total com buffers
+      const totalStartTime = startTime.minus({ minutes: service.buffer_before || 0 });
+      const totalEndTime = endTime.plus({ minutes: service.buffer_after || 0 });
+
+      // 3. Verificar cada calendário
+      const availableCalendars: Array<{
+        calendar_id: string;
+        calendar_name: string;
+        priority: number;
+      }> = [];
+
+      const unavailableCalendars: Array<{
+        calendar_id: string;
+        calendar_name: string;
+        priority: number;
+        conflict_reason: string;
+      }> = [];
+
+      for (const calendar of calendars) {
+        console.log(`🔍 Checking calendar: ${calendar.name} (${calendar.id})`);
+
+        try {
+          // Verificar business hours da instância
+          const { data: instance } = await supabase
+            .from('instances')
+            .select('business_hours')
+            .eq('id', calendar.instance_id)
+            .single();
+
+          if (!instance) {
+            unavailableCalendars.push({
+              calendar_id: calendar.id,
+              calendar_name: calendar.name,
+              priority: calendar.priority,
+              conflict_reason: 'Instance not found'
+            });
+            continue;
+          }
+
+          // Verificar business hours
+          const isWithinBusinessHours = this.isWithinBusinessHours(
+            startTime.toJSDate(),
+            endTime.toJSDate(),
+            instance.business_hours
+          );
+
+          if (!isWithinBusinessHours) {
+            unavailableCalendars.push({
+              calendar_id: calendar.id,
+              calendar_name: calendar.name,
+              priority: calendar.priority,
+              conflict_reason: 'Outside business hours'
+            });
+            continue;
+          }
+
+          // Verificar Google Calendar (com correção de transparency E sobreposição)
+          const isGoogleCalendarAvailable = await this.checkGoogleCalendarAvailability(
+            calendar.google_calendar_id,
+            totalStartTime.toJSDate(),
+            totalEndTime.toJSDate()
+          );
+
+          if (isGoogleCalendarAvailable) {
+            availableCalendars.push({
+              calendar_id: calendar.id,
+              calendar_name: calendar.name,
+              priority: calendar.priority
+            });
+            console.log(`✅ Calendar ${calendar.name} is available`);
+          } else {
+            unavailableCalendars.push({
+              calendar_id: calendar.id,
+              calendar_name: calendar.name,
+              priority: calendar.priority,
+              conflict_reason: 'Time slot already booked'
+            });
+            console.log(`❌ Calendar ${calendar.name} is not available`);
+          }
+
+        } catch (error) {
+          console.error(`Error checking calendar ${calendar.name}:`, error);
+          unavailableCalendars.push({
+            calendar_id: calendar.id,
+            calendar_name: calendar.name,
+            priority: calendar.priority,
+            conflict_reason: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`
+          });
+        }
+      }
+
+      // Ordenar calendários disponíveis por prioridade
+      availableCalendars.sort((a, b) => a.priority - b.priority);
+
+      const result: SlotCheckResponse = {
+        available: availableCalendars.length > 0,
+        service_name: service.name,
+        service_duration: service.duration,
+        start_datetime: startTime.toString(),
+        end_datetime: endTime.toString(),
+        available_calendars: availableCalendars,
+        unavailable_calendars: unavailableCalendars,
+        total_calendars_checked: calendars.length,
+        total_available: availableCalendars.length,
+        total_unavailable: unavailableCalendars.length
+      };
+
+      console.log(`📊 Final result: ${result.total_available}/${result.total_calendars_checked} calendars available`);
+      return result;
+
+    } catch (error) {
+      console.error('Error checking calendars availability:', error);
+      
+      return {
+        available: false,
+        service_name: 'Unknown',
+        service_duration: 0,
+        start_datetime: startDatetime,
+        end_datetime: startDatetime,
+        available_calendars: [],
+        unavailable_calendars: [],
+        total_calendars_checked: 0,
+        total_available: 0,
+        total_unavailable: 0
       };
     }
   }
@@ -240,8 +403,8 @@ export class AvailabilityService {
 
           const startTime = DateTime.fromISO(slot.start_datetime, { setZone: true }).toJSDate();
           const endTime = DateTime.fromISO(slot.end_datetime, { setZone: true }).toJSDate();
-          const totalStartTime = addMinutes(startTime, -service.buffer_before);
-          const totalEndTime = addMinutes(endTime, service.buffer_after);
+          const totalStartTime = addMinutes(startTime, -(service.buffer_before || 0));
+          const totalEndTime = addMinutes(endTime, service.buffer_after || 0);
 
           const isAvailable = await this.checkGoogleCalendarAvailability(
             slot.google_calendar_id,
@@ -318,7 +481,7 @@ export class AvailabilityService {
   }
 
   /**
-   * Verifica disponibilidade no Google Calendar
+   * 🔧 CORREÇÃO FINAL: Verifica disponibilidade no Google Calendar - Transparency + Sobreposição Real
    */
   private async checkGoogleCalendarAvailability(
     googleCalendarId: string,
@@ -334,7 +497,104 @@ export class AvailabilityService {
         orderBy: 'startTime',
       });
 
-      return !response.data.items || response.data.items.length === 0;
+      const events = response.data.items || [];
+      
+      // 🔧 ETAPA 1: Filtrar eventos que não bloqueiam
+      const potentialBlockingEvents = events.filter(event => {
+        // Se transparency é 'transparent', NÃO bloqueia (ex: feriados, lembretes)
+        if (event.transparency === 'transparent') {
+          return false;
+        }
+        
+        // Se status é 'cancelled', NÃO bloqueia
+        if (event.status === 'cancelled') {
+          return false;
+        }
+        
+        // Todos os outros eventos (transparency: 'opaque' ou undefined) podem bloquear
+        return true;
+      });
+
+      // 🔧 ETAPA 2: Verificar sobreposição real com o horário solicitado
+      const conflictingEvents = potentialBlockingEvents.filter(event => {
+        // Extrair horários do evento
+        let eventStart: Date;
+        let eventEnd: Date;
+
+        try {
+          if (event.start?.dateTime) {
+            eventStart = new Date(event.start.dateTime);
+          } else if (event.start?.date) {
+            // Evento de dia inteiro
+            eventStart = new Date(event.start.date + 'T00:00:00');
+          } else {
+            return false; // Evento sem horário válido
+          }
+
+          if (event.end?.dateTime) {
+            eventEnd = new Date(event.end.dateTime);
+          } else if (event.end?.date) {
+            // Evento de dia inteiro
+            eventEnd = new Date(event.end.date + 'T23:59:59');
+          } else {
+            return false; // Evento sem horário válido
+          }
+
+          // ✅ VERIFICAÇÃO DE SOBREPOSIÇÃO:
+          // Há conflito se: (eventStart < endTime) E (eventEnd > startTime)
+          const hasOverlap = (eventStart < endTime) && (eventEnd > startTime);
+          
+          return hasOverlap;
+
+        } catch (error) {
+          console.error('Error parsing event dates:', error);
+          return false;
+        }
+      });
+
+      console.log(`📊 Calendar ${googleCalendarId} - Detailed analysis:`, {
+        query_period: `${startTime.toISOString()} to ${endTime.toISOString()}`,
+        total_events: events.length,
+        transparent_events: events.filter(e => e.transparency === 'transparent').length,
+        cancelled_events: events.filter(e => e.status === 'cancelled').length,
+        potential_blocking: potentialBlockingEvents.length,
+        actual_conflicts: conflictingEvents.length,
+        available: conflictingEvents.length === 0,
+        events_details: events.map(e => {
+          const isTransparent = e.transparency === 'transparent';
+          const isCancelled = e.status === 'cancelled';
+          const isBlocking = !isTransparent && !isCancelled;
+          
+          let hasOverlap = false;
+          if (isBlocking) {
+            try {
+              const eStart = e.start?.dateTime ? new Date(e.start.dateTime) : null;
+              const eEnd = e.end?.dateTime ? new Date(e.end.dateTime) : null;
+              if (eStart && eEnd) {
+                hasOverlap = (eStart < endTime) && (eEnd > startTime);
+              }
+            } catch (err) {
+              // ignore parsing errors
+            }
+          }
+
+          return {
+            summary: e.summary,
+            start: e.start?.dateTime || e.start?.date,
+            end: e.end?.dateTime || e.end?.date,
+            transparency: e.transparency || 'opaque',
+            status: e.status,
+            is_transparent: isTransparent,
+            is_cancelled: isCancelled,
+            could_block: isBlocking,
+            actually_overlaps: hasOverlap
+          };
+        })
+      });
+
+      // ✅ Horário disponível se NÃO há eventos que realmente se sobrepõem
+      return conflictingEvents.length === 0;
+      
     } catch (error) {
       console.error('Error checking Google Calendar availability:', error);
       return false;
