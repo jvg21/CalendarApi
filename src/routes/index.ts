@@ -512,28 +512,46 @@ router.delete('/appointments/:id/delete', authenticateToken, requireAdmin, async
 // Availability Routes
 router.post('/availability/check', authenticateToken, requireAdmin, async (req, res) => {
   try {
-    const { start_datetime, service_id, calendar_id } = req.body;
+    const { start_datetime, service_id, calendar_ids } = req.body;
     
-    if (!start_datetime || !service_id || !calendar_id) {
+    // Validação de parâmetros
+    if (!start_datetime || !service_id || !calendar_ids) {
       res.status(400).json({ 
-        error: 'start_datetime, service_id, and calendar_id are required' 
+        error: 'start_datetime, service_id, and calendar_ids are required' 
       });
       return;
     }
 
-    const isAvailable = await availabilityService.checkAvailability(
+    // Validar se calendar_ids é um array
+    if (!Array.isArray(calendar_ids) || calendar_ids.length === 0) {
+      res.status(400).json({ 
+        error: 'calendar_ids must be a non-empty array' 
+      });
+      return;
+    }
+
+    // Validar se todos os IDs são strings válidas
+    const invalidIds = calendar_ids.filter(id => typeof id !== 'string' || !id.trim());
+    if (invalidIds.length > 0) {
+      res.status(400).json({ 
+        error: 'All calendar_ids must be valid strings' 
+      });
+      return;
+    }
+
+    console.log(`🔍 Checking availability for ${calendar_ids.length} calendar(s) at ${start_datetime}`);
+
+    const result = await availabilityService.checkCalendarsAvailability(
       start_datetime,
       service_id,
-      calendar_id
+      calendar_ids
     );
 
-    res.json({ 
-      available: isAvailable,
-      start_datetime,
-      service_id,
-      calendar_id
-    });
+    console.log(`✅ Availability check complete: ${result.total_available}/${result.total_calendars_checked} calendars available`);
+
+    res.json(result);
   } catch (error) {
+    console.error('❌ Error in availability check:', error);
     res.status(400).json({ error: (error as Error).message });
   }
 });
@@ -587,5 +605,7 @@ router.post('/availability/suggest', authenticateToken, requireAdmin, async (req
     res.status(400).json({ error: (error as Error).message });
   }
 });
+
+
 
 export default router;

@@ -123,19 +123,39 @@ export interface PreferenceOptions {
   max_suggestions?: number;
 }
 // Interfaces para o novo método checkSpecificSlot
+// Interface atualizada para verificação de múltiplos calendários
 export interface SlotCheckRequest {
   instance_id: string;
   service_id: string;
   start_datetime: string;
-  calendar_ids?: string[]; // Opcional - se não fornecido, usa todos os calendários
+  calendar_ids: string[]; // MUDANÇA: array de IDs ao invés de apenas um
 }
 
+// Interface atualizada para resposta com múltiplos calendários
 export interface SlotCheckResponse {
   available: boolean;
   service_name: string;
+  service_duration: number;
   start_datetime: string;
   end_datetime: string;
-  calendar_id: string;
-  calendar_name: string;
-  conflict_reason?: string;
+  
+  // NOVO: Informações sobre calendários disponíveis
+  available_calendars: Array<{
+    calendar_id: string;
+    calendar_name: string;
+    priority: number;
+  }>;
+  
+  // NOVO: Informações sobre calendários não disponíveis
+  unavailable_calendars: Array<{
+    calendar_id: string;
+    calendar_name: string;
+    priority: number;
+    conflict_reason: string;
+  }>;
+  
+  // NOVO: Resumo
+  total_calendars_checked: number;
+  total_available: number;
+  total_unavailable: number;
 }

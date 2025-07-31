@@ -8,7 +8,8 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "setup:google": "ts-node src/scripts/setup-google-auth.ts",
-    "test:google": "ts-node src/scripts/test-google-auth.ts"
+    "test:google": "ts-node src/scripts/test-google-auth.ts",
+    "test:specific-calendar": "ts-node src/scripts/test-specific-calendar.ts"
   },
   "keywords": [],
   "author": "",
