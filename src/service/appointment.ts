@@ -1,11 +1,12 @@
-import { addMinutes, parseISO } from 'date-fns';
+// src/service/appointment.ts - CORRIGIDO PARA USAR LUXON E PRESERVAR TIMEZONE
+
+import { DateTime } from 'luxon';
 import { supabase } from '../config/supabase';
 import { CreateAppointmentRequest, Appointment } from '../types';
 import { calendar } from '../config/google_calendar';
-import { AvailabilityService } from './availability'; // NOVO: Import do serviço de disponibilidade
+import { AvailabilityService } from './availability';
 
 export class AppointmentService {
-  // NOVO: Instância do serviço de disponibilidade
   private availabilityService: AvailabilityService;
 
   constructor() {
@@ -66,17 +67,18 @@ export class AppointmentService {
       throw new Error('No available calendar found');
     }
 
-    const startTime = parseISO(start_datetime);
+    // 🔧 CORREÇÃO: Usar luxon para preservar timezone
+    const startTime = DateTime.fromISO(start_datetime, { setZone: true });
     const endTime = end_datetime
-      ? parseISO(end_datetime)
-      : addMinutes(startTime, service.duration);
+      ? DateTime.fromISO(end_datetime, { setZone: true })
+      : startTime.plus({ minutes: service.duration });
 
     // Validate times
     if (endTime <= startTime) {
       throw new Error('End time must be after start time');
     }
 
-    // NOVO: Verificar disponibilidade antes de criar agendamento
+    // Verificar disponibilidade antes de criar agendamento
     console.log('🔍 Checking availability before creating appointment...');
     const availabilityCheck = await this.availabilityService.checkAvailability(
       start_datetime,
@@ -93,7 +95,7 @@ export class AppointmentService {
     try {
       // Create event in client's shared calendar using your main calendar credentials
       const googleEvent = await this.createEventInSharedCalendar({
-        targetCalendarId: targetCalendar.google_calendar_id, // Cliente's calendar ID
+        targetCalendarId: targetCalendar.google_calendar_id,
         summary: `${service.name} - ${client_name}`,
         description: this.buildEventDescription(service, client_name, description),
         start: startTime,
@@ -101,7 +103,7 @@ export class AppointmentService {
         attendees: client_email ? [{ email: client_email }] : []
       });
 
-      // Save to database
+      // Save to database - usar formato ISO preservando timezone
       const { data: appointment, error } = await supabase
         .from('appointments')
         .insert({
@@ -111,8 +113,8 @@ export class AppointmentService {
           google_event_id: googleEvent.id,
           title: `${service.name} - ${client_name}`,
           description,
-          start_datetime: startTime.toISOString(),
-          end_datetime: endTime.toISOString(),
+          start_datetime: startTime.toString(), // 🔧 Preserva timezone original
+          end_datetime: endTime.toString(),     // 🔧 Preserva timezone original
           client_name,
           client_email,
           client_phone,
@@ -153,15 +155,15 @@ export class AppointmentService {
       throw new Error('Appointment not found');
     }
 
-    let endTime = updates.end_datetime;
+    let endTime: string | undefined = updates.end_datetime;
 
-    // Recalculate end time if start changed but end not provided
+    // 🔧 CORREÇÃO: Recalcular end time usando luxon
     if (updates.start_datetime && !updates.end_datetime) {
-      const startTime = parseISO(updates.start_datetime);
-      endTime = addMinutes(startTime, appointment.services.duration).toISOString();
+      const startTime = DateTime.fromISO(updates.start_datetime, { setZone: true });
+      endTime = startTime.plus({ minutes: appointment.services.duration }).toString();
     }
 
-    // NOVO: Verificar disponibilidade se horário mudou
+    // Verificar disponibilidade se horário mudou
     if (updates.start_datetime || updates.end_datetime) {
       console.log('🔍 Checking availability for updated time...');
       
@@ -182,12 +184,21 @@ export class AppointmentService {
 
     // Update Google Calendar event if time/title changed
     if (updates.start_datetime || updates.end_datetime || updates.title) {
+      // 🔧 CORREÇÃO: Usar luxon para parsing
+      const eventStartTime = updates.start_datetime 
+        ? DateTime.fromISO(updates.start_datetime, { setZone: true })
+        : DateTime.fromISO(appointment.start_datetime, { setZone: true });
+      
+      const eventEndTime = endTime 
+        ? DateTime.fromISO(endTime, { setZone: true })
+        : DateTime.fromISO(appointment.end_datetime, { setZone: true });
+
       await this.updateEventInSharedCalendar(
         appointment.calendars.google_calendar_id,
         appointment.google_event_id,
         {
-          start: updates.start_datetime ? parseISO(updates.start_datetime) : parseISO(appointment.start_datetime),
-          end: endTime ? parseISO(endTime) : parseISO(appointment.end_datetime),
+          start: eventStartTime,
+          end: eventEndTime,
           summary: updates.title || appointment.title,
           description: updates.description || appointment.description
         }
@@ -276,7 +287,6 @@ export class AppointmentService {
     console.log('✅ Appointment cancelled successfully');
   }
 
-  // NOVO: Método para verificar se agendamento existente não está em conflito
   async validateExistingAppointment(appointmentId: string): Promise<boolean> {
     const { data: appointment } = await supabase
       .from('appointments')
@@ -297,29 +307,26 @@ export class AppointmentService {
     return availabilityCheck.available;
   }
 
-  private async createEventInSharedCalendar(eventData: any) {
-    // Função para converter Date para string local São Paulo sem timezone
-    const toLocalDateTime = (date: Date) => {
-      // Assumir que a data recebida já está no timezone correto
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const day = String(date.getDate()).padStart(2, '0');
-      const hours = String(date.getHours()).padStart(2, '0');
-      const minutes = String(date.getMinutes()).padStart(2, '0');
-      const seconds = String(date.getSeconds()).padStart(2, '0');
-      
-      return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
-    };
-
+  // 🔧 CORREÇÃO: Função reformulada para trabalhar com DateTime
+  private async createEventInSharedCalendar(eventData: {
+    targetCalendarId: string;
+    summary: string;
+    description: string;
+    start: DateTime;
+    end: DateTime;
+    attendees: Array<{ email: string }>;
+  }) {
     const event = {
       summary: eventData.summary,
       description: eventData.description,
       start: {
-        dateTime: toLocalDateTime(eventData.start),
+        // 🔧 CORREÇÃO: Usar dateTime com timezone preservado
+        dateTime: eventData.start.toISO(), // Mantém timezone original (-03:00)
         timeZone: 'America/Sao_Paulo',
       },
       end: {
-        dateTime: toLocalDateTime(eventData.end),
+        // 🔧 CORREÇÃO: Usar dateTime com timezone preservado
+        dateTime: eventData.end.toISO(), // Mantém timezone original (-03:00)
         timeZone: 'America/Sao_Paulo',
       },
       attendees: eventData.attendees,
@@ -338,6 +345,14 @@ export class AppointmentService {
       guestsCanSeeOtherGuests: true,
     };
 
+    console.log('🗓️ Creating Google Calendar event:', {
+      calendarId: eventData.targetCalendarId,
+      summary: event.summary,
+      start_datetime: event.start.dateTime,
+      end_datetime: event.end.dateTime,
+      timezone: event.start.timeZone
+    });
+
     const response = await calendar.events.insert({
       calendarId: eventData.targetCalendarId,
       requestBody: event,
@@ -348,19 +363,39 @@ export class AppointmentService {
     return response.data;
   }
 
-  private async updateEventInSharedCalendar(calendarId: string, eventId: string, updates: any) {
+  // 🔧 CORREÇÃO: Função reformulada para trabalhar com DateTime
+  private async updateEventInSharedCalendar(
+    calendarId: string, 
+    eventId: string, 
+    updates: {
+      start: DateTime;
+      end: DateTime;
+      summary: string;
+      description?: string;
+    }
+  ) {
     const event = {
       summary: updates.summary,
       description: updates.description,
       start: {
-        dateTime: updates.start.toISOString(),
+        // 🔧 CORREÇÃO: Usar dateTime com timezone preservado
+        dateTime: updates.start.toISO(), // Mantém timezone original
         timeZone: 'America/Sao_Paulo',
       },
       end: {
-        dateTime: updates.end.toISOString(),
+        // 🔧 CORREÇÃO: Usar dateTime com timezone preservado
+        dateTime: updates.end.toISO(), // Mantém timezone original
         timeZone: 'America/Sao_Paulo',
       },
     };
+
+    console.log('🔄 Updating Google Calendar event:', {
+      calendarId,
+      eventId,
+      start_datetime: event.start.dateTime,
+      end_datetime: event.end.dateTime,
+      timezone: event.start.timeZone
+    });
 
     await calendar.events.update({
       calendarId,
@@ -422,7 +457,7 @@ export class AppointmentService {
     }
   }
 
-  // Método para listar eventos de um calendário compartilhado
+  // 🔧 CORREÇÃO: Método reformulado para usar luxon
   async getSharedCalendarEvents(calendarId: string, startDate: Date, endDate: Date) {
     try {
       const response = await calendar.events.list({
