@@ -780,10 +780,29 @@
 /**
  * @swagger
  * /api/appointments:
+ *   /**
+ * @swagger
+ * /api/appointments:
  *   get:
  *     tags: [Appointments]
- *     summary: List appointments
- *     description: Retrieve appointments with optional filtering
+ *     summary: List appointments with advanced filtering and pagination
+ *     description: |
+ *       Retrieve appointments with comprehensive filtering options and pagination.
+ *       
+ *       **Filter Examples:**
+ *       - `?instance_id=123e4567-e89b-12d3-a456-426614174000` - Filter by instance
+ *       - `?status=scheduled` - Filter by status
+ *       - `?start_date=2024-03-15` - Appointments from this date onwards
+ *       - `?end_date=2024-03-20` - Appointments until this date
+ *       - `?start_date=2024-03-15&end_date=2024-03-15` - Appointments on specific date
+ *       - `?flow_id=12345` - Filter by external flow ID
+ *       - `?client_email=joao@email.com` - Search by client email (partial match)
+ *       - `?page=2&limit=20` - Pagination
+ *       
+ *       **Date Formats Supported:**
+ *       - `2024-03-15` - Date only (assumes start/end of day)
+ *       - `2024-03-15T10:00:00` - Date with time
+ *       - `2024-03-15T10:00:00-03:00` - Date with time and timezone
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -793,68 +812,240 @@
  *           type: string
  *           format: uuid
  *         description: Filter by instance ID
+ *         example: "123e4567-e89b-12d3-a456-426614174000"
+ *       - in: query
+ *         name: calendar_id
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Filter by calendar ID
+ *       - in: query
+ *         name: service_id
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Filter by service ID
  *       - in: query
  *         name: start_date
  *         schema:
  *           type: string
  *           format: date-time
- *         description: Filter appointments from this date
+ *         description: |
+ *           Filter appointments from this date/time onwards.
+ *           Supports multiple formats: '2024-03-15', '2024-03-15T10:00:00', '2024-03-15T10:00:00-03:00'
+ *         example: "2024-03-15"
  *       - in: query
  *         name: end_date
  *         schema:
  *           type: string
  *           format: date-time
- *         description: Filter appointments until this date
+ *         description: |
+ *           Filter appointments until this date/time.
+ *           If time is not specified, assumes end of day (23:59:59)
+ *         example: "2024-03-20"
  *       - in: query
  *         name: status
  *         schema:
  *           type: string
  *           enum: [scheduled, confirmed, cancelled, completed]
  *         description: Filter by appointment status
+ *         example: "scheduled"
  *       - in: query
  *         name: flow_id
  *         schema:
  *           type: integer
  *         description: Filter by flow ID (external integration)
+ *         example: 12345
  *       - in: query
  *         name: agent_id
  *         schema:
  *           type: integer
  *         description: Filter by agent ID (external integration)
+ *         example: 67890
  *       - in: query
  *         name: user_id
  *         schema:
  *           type: integer
  *         description: Filter by user ID (external integration)
+ *         example: 11111
+ *       - in: query
+ *         name: client_email
+ *         schema:
+ *           type: string
+ *         description: Search by client email (partial match, case-insensitive)
+ *         example: "joao@email.com"
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           default: 1
+ *         description: Page number for pagination
+ *         example: 1
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           maximum: 100
+ *           default: 50
+ *         description: Number of items per page (max 100)
+ *         example: 20
  *     responses:
  *       200:
- *         description: List of appointments with related data
+ *         description: List of appointments with pagination and filter metadata
  *         content:
  *           application/json:
  *             schema:
- *               type: array
- *               items:
- *                 allOf:
- *                   - $ref: '#/components/schemas/Appointment'
- *                   - type: object
- *                     properties:
- *                       instances:
- *                         type: object
+ *               type: object
+ *               properties:
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     allOf:
+ *                       - $ref: '#/components/schemas/Appointment'
+ *                       - type: object
  *                         properties:
- *                           name:
- *                             type: string
- *                       calendars:
- *                         type: object
- *                         properties:
- *                           name:
- *                             type: string
- *                       services:
- *                         type: object
- *                         properties:
- *                           name:
- *                             type: string
- *                           duration:
- *                             type: integer
+ *                           instances:
+ *                             type: object
+ *                             properties:
+ *                               name:
+ *                                 type: string
+ *                           calendars:
+ *                             type: object
+ *                             properties:
+ *                               name:
+ *                                 type: string
+ *                               google_calendar_id:
+ *                                 type: string
+ *                           services:
+ *                             type: object
+ *                             properties:
+ *                               name:
+ *                                 type: string
+ *                               duration:
+ *                                 type: integer
+ *                               price:
+ *                                 type: number
+ *                 pagination:
+ *                   type: object
+ *                   properties:
+ *                     page:
+ *                       type: integer
+ *                       description: Current page number
+ *                     limit:
+ *                       type: integer
+ *                       description: Items per page
+ *                     total:
+ *                       type: integer
+ *                       description: Total number of items
+ *                     total_pages:
+ *                       type: integer
+ *                       description: Total number of pages
+ *                     has_next:
+ *                       type: boolean
+ *                       description: Whether there are more pages
+ *                     has_prev:
+ *                       type: boolean
+ *                       description: Whether there are previous pages
+ *                 filters_applied:
+ *                   type: object
+ *                   description: Summary of filters that were applied
+ *                   properties:
+ *                     instance_id:
+ *                       type: string
+ *                       nullable: true
+ *                     calendar_id:
+ *                       type: string
+ *                       nullable: true
+ *                     service_id:
+ *                       type: string
+ *                       nullable: true
+ *                     start_date:
+ *                       type: string
+ *                       nullable: true
+ *                     end_date:
+ *                       type: string
+ *                       nullable: true
+ *                     status:
+ *                       type: string
+ *                       nullable: true
+ *                     flow_id:
+ *                       type: integer
+ *                       nullable: true
+ *                     agent_id:
+ *                       type: integer
+ *                       nullable: true
+ *                     user_id:
+ *                       type: integer
+ *                       nullable: true
+ *                     client_email:
+ *                       type: string
+ *                       nullable: true
+ *             example:
+ *               data:
+ *                 - id: "123e4567-e89b-12d3-a456-426614174000"
+ *                   instance_id: "456e7890-e89b-12d3-a456-426614174001"
+ *                   calendar_id: "789e0123-e89b-12d3-a456-426614174002"
+ *                   service_id: "abc1234d-e89b-12d3-a456-426614174003"
+ *                   title: "Consulta Médica - João Silva"
+ *                   start_datetime: "2024-03-15T14:00:00-03:00"
+ *                   end_datetime: "2024-03-15T15:00:00-03:00"
+ *                   status: "scheduled"
+ *                   client_name: "João Silva"
+ *                   client_email: "joao@email.com"
+ *                   flow_id: 12345
+ *                   agent_id: 67890
+ *                   instances:
+ *                     name: "Clínica Médica São Paulo"
+ *                   calendars:
+ *                     name: "Dr. Silva - Consultório A"
+ *                   services:
+ *                     name: "Consulta Médica"
+ *                     duration: 60
+ *                     price: 150.00
+ *               pagination:
+ *                 page: 1
+ *                 limit: 20
+ *                 total: 45
+ *                 total_pages: 3
+ *                 has_next: true
+ *                 has_prev: false
+ *               filters_applied:
+ *                 instance_id: "456e7890-e89b-12d3-a456-426614174001"
+ *                 status: "scheduled"
+ *                 start_date: "2024-03-15"
+ *                 end_date: null
+ *                 flow_id: null
+ *                 agent_id: null
+ *                 user_id: null
+ *                 client_email: null
+ *       400:
+ *         description: Invalid filter parameters
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *             examples:
+ *               invalid_date:
+ *                 summary: Invalid date format
+ *                 value:
+ *                   error: "Invalid start_date format. Use ISO 8601 format (e.g., 2024-03-15 or 2024-03-15T10:00:00)"
+ *               invalid_status:
+ *                 summary: Invalid status value
+ *                 value:
+ *                   error: "Invalid status. Must be one of: scheduled, confirmed, cancelled, completed"
+ *               invalid_integer:
+ *                 summary: Invalid integer parameter
+ *                 value:
+ *                   error: "flow_id must be a valid integer"
+ *       500:
+ *         description: Server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *
  *   post:
  *     tags: [Appointments]
  *     summary: Create appointment
@@ -1221,6 +1412,85 @@
  *                   description: Parâmetros utilizados na busca
  *       400:
  *         description: Parâmetros inválidos
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+
+/**
+ * @swagger
+ * /api/appointments/update-expired:
+ *   post:
+ *     tags: [Appointments]
+ *     summary: Update expired appointments
+ *     description: Automatically updates the status of appointments that have passed their end time
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               flow_id:
+ *                 type: integer
+ *                 description: Filter by flow ID (external integration)
+ *               user_id:
+ *                 type: integer
+ *                 description: Filter by user ID (external integration)
+ *               agent_id:
+ *                 type: integer
+ *                 description: Filter by agent ID (external integration)
+ *               instance_id:
+ *                 type: string
+ *                 format: uuid
+ *                 description: Filter by instance ID
+ *           examples:
+ *             no_filters:
+ *               summary: Update all expired appointments
+ *               value: {}
+ *             with_flow_filter:
+ *               summary: Update expired appointments for specific flow
+ *               value:
+ *                 flow_id: 123
+ *                 user_id: 456
+ *                 agent_id: 789
+ *     responses:
+ *       200:
+ *         description: Expired appointments updated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 updated_count:
+ *                   type: integer
+ *                   description: Number of appointments updated
+ *                   example: 3
+ *                 updated_appointments:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: string
+ *                         format: uuid
+ *                       title:
+ *                         type: string
+ *                       end_datetime:
+ *                         type: string
+ *                         format: date-time
+ *                       old_status:
+ *                         type: string
+ *                       new_status:
+ *                         type: string
+ *                 message:
+ *                   type: string
+ *                   example: "Successfully updated 3 expired appointments"
+ *       400:
+ *         description: Error updating appointments
  *         content:
  *           application/json:
  *             schema:

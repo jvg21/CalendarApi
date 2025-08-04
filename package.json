@@ -10,7 +10,8 @@
     "setup:google": "ts-node src/scripts/setup-google-auth.ts",
     "test:google": "ts-node src/scripts/test-google-auth.ts",
     "test:specific-calendar": "ts-node src/scripts/test-specific-calendar.ts",
-    "test:timezone": "ts-node src/scripts/test-timezone-fix.ts"
+    "test:timezone": "ts-node src/scripts/test-timezone-fix.ts",
+    "test:filters": "ts-node src/scripts/test-appointments-filters.ts"
   },
   "keywords": [],
   "author": "",

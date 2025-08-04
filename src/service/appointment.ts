@@ -77,6 +77,7 @@ export class AppointmentService {
     if (endTime <= startTime) {
       throw new Error('End time must be after start time');
     }
+    
 
     // Verificar disponibilidade antes de criar agendamento
     console.log('🔍 Checking availability before creating appointment...');
@@ -475,4 +476,102 @@ export class AppointmentService {
       return [];
     }
   }
+  // Adicionar este método na classe AppointmentService em src/service/appointment.ts
+
+/**
+ * Atualiza automaticamente o status de agendamentos que passaram do horário
+ */
+async updateExpiredAppointments(filters?: {
+  flow_id?: number;
+  user_id?: number;
+  agent_id?: number;
+  instance_id?: string;
+}): Promise<{
+  updated_count: number;
+  updated_appointments: Array<{
+    id: string;
+    title: string;
+    end_datetime: string;
+    old_status: string;
+    new_status: string;
+  }>;
+}> {
+  try {
+    console.log('🔍 Checking for expired appointments...');
+
+    // Construir query base
+    let query = supabase
+      .from('appointments')
+      .select('id, title, end_datetime, status, flow_id, user_id, agent_id')
+      .in('status', ['scheduled', 'confirmed']) // Apenas agendamentos ativos
+      .lt('end_datetime', new Date().toISOString()); // Que já passaram do horário
+
+    // Aplicar filtros opcionais
+    if (filters?.flow_id) {
+      query = query.eq('flow_id', filters.flow_id);
+    }
+    if (filters?.user_id) {
+      query = query.eq('user_id', filters.user_id);
+    }
+    if (filters?.agent_id) {
+      query = query.eq('agent_id', filters.agent_id);
+    }
+    if (filters?.instance_id) {
+      query = query.eq('instance_id', filters.instance_id);
+    }
+
+    // Buscar agendamentos expirados
+    const { data: expiredAppointments, error: fetchError } = await query;
+
+    if (fetchError) {
+      throw new Error(`Error fetching expired appointments: ${fetchError.message}`);
+    }
+
+    if (!expiredAppointments || expiredAppointments.length === 0) {
+      console.log('✅ No expired appointments found');
+      return {
+        updated_count: 0,
+        updated_appointments: []
+      };
+    }
+
+    console.log(`📋 Found ${expiredAppointments.length} expired appointments`);
+
+    // Atualizar status para 'completed'
+    const appointmentIds = expiredAppointments.map(apt => apt.id);
+    
+    const { data: updatedAppointments, error: updateError } = await supabase
+      .from('appointments')
+      .update({ 
+        status: 'completed',
+        updated_at: new Date().toISOString()
+      })
+      .in('id', appointmentIds)
+      .select('id, title, end_datetime, status');
+
+    if (updateError) {
+      throw new Error(`Error updating expired appointments: ${updateError.message}`);
+    }
+
+    // Preparar resultado
+    const result = expiredAppointments.map(apt => ({
+      id: apt.id,
+      title: apt.title,
+      end_datetime: apt.end_datetime,
+      old_status: apt.status,
+      new_status: 'completed'
+    }));
+
+    console.log(`✅ Successfully updated ${result.length} expired appointments to 'completed' status`);
+
+    return {
+      updated_count: result.length,
+      updated_appointments: result
+    };
+
+  } catch (error) {
+    console.error('❌ Error updating expired appointments:', error);
+    throw new Error(`Failed to update expired appointments: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
 }

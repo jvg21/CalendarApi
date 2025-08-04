@@ -6,6 +6,7 @@ import { AppointmentService } from '../service/appointment';
 
 // Import das definições do Swagger
 import '../docs/swagger-definitions';
+import { fi } from 'date-fns/locale';
 
 const router = express.Router();
 const availabilityService = new AvailabilityService();
@@ -431,55 +432,198 @@ router.get('/services/categories', authenticateToken, requireAdmin, async (req, 
 // Appointment Routes
 router.post('/appointments', authenticateToken, requireAdmin, async (req, res) => {
   try {
+    await appointmentService.updateExpiredAppointments();
     const appointment = await appointmentService.createAppointment(req.body);
     res.json(appointment);
   } catch (error) {
     res.status(400).json({ error: (error as Error).message });
   }
 });
+// Substitua a rota GET /appointments no arquivo src/routes/index.ts
 
 router.get('/appointments', authenticateToken, requireAdmin, async (req, res) => {
-  const { 
-    instance_id, 
-    start_date, 
-    end_date, 
-    status,
-    flow_id,
-    agent_id,
-    user_id
-  } = req.query;
-  
-  let query = supabase
-    .from('appointments')
-    .select(`
-      *,
-      instances(name),
-      calendars(name),
-      services(name, duration)
-    `)
-    .order('start_datetime');
+  try {
+    const { 
+      instance_id, 
+      start_date, 
+      end_date, 
+      status,
+      flow_id,
+      agent_id,
+      user_id,
+      calendar_id,
+      service_id,
+      client_email,
+      page = '1',
+      limit = '50'
+    } = req.query;
 
-  // Apply filters
-  if (instance_id) query = query.eq('instance_id', instance_id);
-  if (start_date) query = query.gte('start_datetime', start_date);
-  if (end_date) query = query.lte('start_datetime', end_date);
-  if (status) query = query.eq('status', status);
-  if (flow_id) query = query.eq('flow_id', parseInt(flow_id as string));
-  if (agent_id) query = query.eq('agent_id', parseInt(agent_id as string));
-  if (user_id) query = query.eq('user_id', parseInt(user_id as string));
+     await appointmentService.updateExpiredAppointments();
 
-  const { data, error } = await query;
+    // Validação de parâmetros
+    const pageNum = parseInt(page as string) || 1;
+    const limitNum = Math.min(parseInt(limit as string) || 50, 100); // Max 100 por página
+    const offset = (pageNum - 1) * limitNum;
 
-  if (error) {
-    res.status(500).json({ error: error.message });
-    return;
+    let query = supabase
+      .from('appointments')
+      .select(`
+        *,
+        instances(name),
+        calendars(name, google_calendar_id),
+        services(name, duration, price)
+      `, { count: 'exact' }) // Para paginação
+      .order('start_datetime', { ascending: false }); // Mais recentes primeiro
+
+    // 🔧 FILTROS CORRIGIDOS
+
+    // Filtro por instância
+    if (instance_id && typeof instance_id === 'string') {
+      query = query.eq('instance_id', instance_id);
+    }
+
+    // Filtro por calendário
+    if (calendar_id && typeof calendar_id === 'string') {
+      query = query.eq('calendar_id', calendar_id);
+    }
+
+    // Filtro por serviço
+    if (service_id && typeof service_id === 'string') {
+      query = query.eq('service_id', service_id);
+    }
+
+    // 🔧 FILTROS DE DATA CORRIGIDOS
+    if (start_date && typeof start_date === 'string') {
+      try {
+        // Validar formato da data
+        const startDateParsed = new Date(start_date);
+        if (isNaN(startDateParsed.getTime())) {
+          res.status(400).json({ 
+            error: 'Invalid start_date format. Use ISO 8601 format (e.g., 2024-03-15 or 2024-03-15T10:00:00)' 
+          });
+          return;
+        }
+        
+        // Filtrar agendamentos que começam a partir desta data
+        query = query.gte('start_datetime', start_date);
+      } catch (error) {
+        res.status(400).json({ error: 'Invalid start_date format' });
+        return;
+      }
+    }
+
+    if (end_date && typeof end_date === 'string') {
+      try {
+        // Validar formato da data
+        const endDateParsed = new Date(end_date);
+        if (isNaN(endDateParsed.getTime())) {
+          res.status(400).json({ 
+            error: 'Invalid end_date format. Use ISO 8601 format (e.g., 2024-03-15 or 2024-03-15T23:59:59)' 
+          });
+          return;
+        }
+
+        // Se end_date não tem horário, adicionar fim do dia
+        const endDateStr = end_date.includes('T') ? end_date : `${end_date}T23:59:59`;
+        
+        // Filtrar agendamentos que começam antes ou no final desta data
+        query = query.lte('start_datetime', endDateStr);
+      } catch (error) {
+        res.status(400).json({ error: 'Invalid end_date format' });
+        return;
+      }
+    }
+
+    // 🔧 FILTRO DE STATUS CORRIGIDO
+    if (status && typeof status === 'string') {
+      const validStatuses = ['scheduled', 'confirmed', 'cancelled', 'completed'];
+      if (!validStatuses.includes(status)) {
+        res.status(400).json({ 
+          error: `Invalid status. Must be one of: ${validStatuses.join(', ')}` 
+        });
+        return;
+      }
+      query = query.eq('status', status);
+    }
+
+    // 🔧 FILTROS NUMÉRICOS CORRIGIDOS
+    if (flow_id && typeof flow_id === 'string') {
+      const flowIdNum = parseInt(flow_id);
+      if (isNaN(flowIdNum)) {
+        res.status(400).json({ error: 'flow_id must be a valid integer' });
+        return;
+      }
+      query = query.eq('flow_id', flowIdNum);
+    }
+
+    if (agent_id && typeof agent_id === 'string') {
+      const agentIdNum = parseInt(agent_id);
+      if (isNaN(agentIdNum)) {
+        res.status(400).json({ error: 'agent_id must be a valid integer' });
+        return;
+      }
+      query = query.eq('agent_id', agentIdNum);
+    }
+
+    if (user_id && typeof user_id === 'string') {
+      const userIdNum = parseInt(user_id);
+      if (isNaN(userIdNum)) {
+        res.status(400).json({ error: 'user_id must be a valid integer' });
+        return;
+      }
+      query = query.eq('user_id', userIdNum);
+    }
+
+    // 🔧 FILTRO POR EMAIL DO CLIENTE
+    if (client_email && typeof client_email === 'string') {
+      query = query.ilike('client_email', `%${client_email}%`);
+    }
+
+    // 🔧 APLICAR PAGINAÇÃO
+    query = query.range(offset, offset + limitNum - 1);
+
+    const { data, error, count } = await query;
+
+    if (error) {
+      console.error('Database error:', error);
+      res.status(500).json({ error: error.message });
+      return;
+    }
+
+    // 🔧 RESPOSTA COM METADADOS DE PAGINAÇÃO
+    res.json({
+      data: data || [],
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total: count || 0,
+        total_pages: Math.ceil((count || 0) / limitNum),
+        has_next: (count || 0) > offset + limitNum,
+        has_prev: pageNum > 1
+      },
+      filters_applied: {
+        instance_id: instance_id || null,
+        calendar_id: calendar_id || null,
+        service_id: service_id || null,
+        start_date: start_date || null,
+        end_date: end_date || null,
+        status: status || null,
+        flow_id: flow_id ? parseInt(flow_id as string) : null,
+        agent_id: agent_id ? parseInt(agent_id as string) : null,
+        user_id: user_id ? parseInt(user_id as string) : null,
+        client_email: client_email || null
+      }
+    });
+
+  } catch (error) {
+    console.error('Error in appointments endpoint:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
-
-  res.json(data);
 });
 
 router.put('/appointments/:id', authenticateToken, requireAdmin, async (req, res) => {
   try {
+    await appointmentService.updateExpiredAppointments();
     const appointment = await appointmentService.updateAppointment(req.params.id, req.body);
     res.json(appointment);
   } catch (error) {
@@ -498,6 +642,8 @@ router.delete('/appointments/:id', authenticateToken, requireAdmin, async (req, 
 
 router.delete('/appointments/:id/delete', authenticateToken, requireAdmin, async (req, res) => {
   try {
+    
+
     await appointmentService.deleteAppointment(req.params.id);
     res.json({ message: 'Appointment deleted permanently' });
   } catch (error) {
@@ -606,6 +752,24 @@ router.post('/availability/suggest', authenticateToken, requireAdmin, async (req
   }
 });
 
+router.post('/appointments/update-expired', authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const filters = req.body || {};
+    
+    console.log('🔄 Updating expired appointments with filters:', filters);
+    
+    const result = await appointmentService.updateExpiredAppointments(filters);
+    
+    res.json({
+      ...result,
+      message: `Successfully updated ${result.updated_count} expired appointments`
+    });
+    
+  } catch (error) {
+    console.error('❌ Error in update-expired endpoint:', error);
+    res.status(400).json({ error: (error as Error).message });
+  }
+});
 
 
 export default router;
