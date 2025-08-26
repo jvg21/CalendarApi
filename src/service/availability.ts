@@ -1,6 +1,6 @@
-// src/service/availability.ts - COMPLETO COM TODAS AS CORREÇÕES DE TIMEZONE
+// src/service/availability.ts - VERSÃO COMPLETA CORRIGIDA
 
-import { addMinutes } from 'date-fns';
+import { addMinutes, parseISO, format, addDays, isAfter, isBefore, isWithinInterval } from 'date-fns';
 import { supabase } from '../config/supabase';
 import { calendar } from '../config/google_calendar';
 import { DateTime } from 'luxon';
@@ -43,7 +43,7 @@ export interface TimeBlocksConfig {
 export class AvailabilityService {
 
   /**
-   * Verifica se um horário específico está disponível para agendamento
+   * 🔧 MÉTODO CORRIGIDO: Verifica se um horário específico está disponível
    */
   async checkAvailability(
     startDatetime: string,
@@ -51,6 +51,8 @@ export class AvailabilityService {
     calendarId: string
   ): Promise<AvailabilityCheckResult> {
     try {
+      console.log(`🔍 Checking availability: ${startDatetime} for service ${service_id} in calendar ${calendarId}`);
+
       // 1. Buscar dados do serviço
       const { data: service, error: serviceError } = await supabase
         .from('services')
@@ -101,12 +103,25 @@ export class AvailabilityService {
         };
       }
 
+      // 🔧 CORREÇÃO DE TIMEZONE: Parsing correto preservando timezone original
+      console.log(`📅 Parsing timezone: Input = ${startDatetime}`);
+      
       const startTime = DateTime.fromISO(startDatetime, { setZone: true });
       const endTime = startTime.plus({ minutes: service.duration });
       
       // Calcular horário total com buffers
       const totalStartTime = startTime.minus({ minutes: service.buffer_before || 0 });
       const totalEndTime = endTime.plus({ minutes: service.buffer_after || 0 });
+
+      console.log(`📊 Timezone conversion check:`, {
+        input: startDatetime,
+        parsed_local: startTime.toString(),
+        parsed_utc: startTime.toUTC().toString(),
+        total_start_local: totalStartTime.toString(),
+        total_start_utc: totalStartTime.toUTC().toString(),
+        timezone: startTime.zoneName,
+        offset_hours: startTime.offset / 60
+      });
 
       // Objeto base de resposta
       const baseResponse = {
@@ -117,8 +132,8 @@ export class AvailabilityService {
         service_duration: service.duration
       };
 
-      // 4. 🔧 CORREÇÃO: Verificar business hours usando timezone da instância
-      if (!this.isWithinBusinessHours(startTime, endTime, instance.business_hours, instance.timezone)) {
+      // 4. Verificar se está dentro do horário comercial (usar horário LOCAL)
+      if (!this.isWithinBusinessHours(startTime.toJSDate(), endTime.toJSDate(), instance.business_hours)) {
         return {
           ...baseResponse,
           available: false,
@@ -126,11 +141,21 @@ export class AvailabilityService {
         };
       }
 
-      // 5. Verificar disponibilidade no Google Calendar
+      // 5. 🔧 CORREÇÃO PRINCIPAL: Converter para UTC antes do Google Calendar
+      console.log(`🌍 Converting to UTC for Google Calendar API...`);
+      
+      const utcStartTime = totalStartTime.toUTC().toJSDate();
+      const utcEndTime = totalEndTime.toUTC().toJSDate();
+      
+      console.log(`📅 UTC times for Google Calendar:`, {
+        utc_start: utcStartTime.toISOString(),
+        utc_end: utcEndTime.toISOString()
+      });
+
       const isAvailable = await this.checkGoogleCalendarAvailability(
         calendarData.google_calendar_id,
-        totalStartTime.toJSDate(),
-        totalEndTime.toJSDate()
+        utcStartTime,  // ✅ CORRIGIDO: Agora em UTC
+        utcEndTime     // ✅ CORRIGIDO: Agora em UTC
       );
 
       if (!isAvailable) {
@@ -161,7 +186,7 @@ export class AvailabilityService {
   }
 
   /**
-   * Verifica disponibilidade em múltiplos calendários
+   * 🔧 MÉTODO CORRIGIDO: Verifica disponibilidade em múltiplos calendários
    */
   async checkCalendarsAvailability(
     startDatetime: string,
@@ -193,12 +218,17 @@ export class AvailabilityService {
         throw new Error('No active calendars found');
       }
 
+      // 🔧 PARSING CORRETO DE TIMEZONE
       const startTime = DateTime.fromISO(startDatetime, { setZone: true });
       const endTime = startTime.plus({ minutes: service.duration });
       
-      // Calcular horário total com buffers
-      const totalStartTime = startTime.minus({ minutes: service.buffer_before || 0 });
-      const totalEndTime = endTime.plus({ minutes: service.buffer_after || 0 });
+      console.log(`🌍 Input timezone analysis:`, {
+        input: startDatetime,
+        parsed_local: startTime.toString(),
+        parsed_utc: startTime.toUTC().toString(),
+        timezone: startTime.zoneName,
+        offset: startTime.offset
+      });
 
       // 3. Verificar cada calendário
       const availableCalendars: Array<{
@@ -214,75 +244,84 @@ export class AvailabilityService {
         conflict_reason: string;
       }> = [];
 
-      for (const calendar of calendars) {
-        console.log(`🔍 Checking calendar: ${calendar.name} (${calendar.id})`);
+      for (const calendarData of calendars) {
+        console.log(`\n🔍 Checking calendar: ${calendarData.name} (${calendarData.id})`);
 
         try {
-          // Verificar business hours da instância
+          // Buscar business hours da instância
           const { data: instance } = await supabase
             .from('instances')
-            .select('business_hours, timezone')
-            .eq('id', calendar.instance_id)
+            .select('business_hours')
+            .eq('id', calendarData.instance_id)
             .single();
 
           if (!instance) {
             unavailableCalendars.push({
-              calendar_id: calendar.id,
-              calendar_name: calendar.name,
-              priority: calendar.priority,
+              calendar_id: calendarData.id,
+              calendar_name: calendarData.name,
+              priority: calendarData.priority,
               conflict_reason: 'Instance not found'
             });
             continue;
           }
 
-          // 🔧 CORREÇÃO: Verificar business hours usando timezone da instância
+          // Verificar business hours (usar horário LOCAL)
           const isWithinBusinessHours = this.isWithinBusinessHours(
-            startTime,
-            endTime,
-            instance.business_hours,
-            instance.timezone
+            startTime.toJSDate(),
+            endTime.toJSDate(),
+            instance.business_hours
           );
 
           if (!isWithinBusinessHours) {
             unavailableCalendars.push({
-              calendar_id: calendar.id,
-              calendar_name: calendar.name,
-              priority: calendar.priority,
+              calendar_id: calendarData.id,
+              calendar_name: calendarData.name,
+              priority: calendarData.priority,
               conflict_reason: 'Outside business hours'
             });
             continue;
           }
 
-          // Verificar Google Calendar
+          // 🔧 CORREÇÃO: Calcular buffers e converter para UTC
+          const totalStartTime = startTime.minus({ minutes: service.buffer_before || 0 });
+          const totalEndTime = endTime.plus({ minutes: service.buffer_after || 0 });
+          
+          console.log(`🌍 Converting ${calendarData.name} times to UTC:`, {
+            local_start: totalStartTime.toString(),
+            local_end: totalEndTime.toString(),
+            utc_start: totalStartTime.toUTC().toJSDate().toISOString(),
+            utc_end: totalEndTime.toUTC().toJSDate().toISOString()
+          });
+
           const isGoogleCalendarAvailable = await this.checkGoogleCalendarAvailability(
-            calendar.google_calendar_id,
-            totalStartTime.toJSDate(),
-            totalEndTime.toJSDate()
+            calendarData.google_calendar_id,
+            totalStartTime.toUTC().toJSDate(),  // ✅ CORRIGIDO
+            totalEndTime.toUTC().toJSDate()     // ✅ CORRIGIDO
           );
 
           if (isGoogleCalendarAvailable) {
             availableCalendars.push({
-              calendar_id: calendar.id,
-              calendar_name: calendar.name,
-              priority: calendar.priority
+              calendar_id: calendarData.id,
+              calendar_name: calendarData.name,
+              priority: calendarData.priority
             });
-            console.log(`✅ Calendar ${calendar.name} is available`);
+            console.log(`✅ Calendar ${calendarData.name} is available`);
           } else {
             unavailableCalendars.push({
-              calendar_id: calendar.id,
-              calendar_name: calendar.name,
-              priority: calendar.priority,
+              calendar_id: calendarData.id,
+              calendar_name: calendarData.name,
+              priority: calendarData.priority,
               conflict_reason: 'Time slot already booked'
             });
-            console.log(`❌ Calendar ${calendar.name} is not available`);
+            console.log(`❌ Calendar ${calendarData.name} is not available`);
           }
 
         } catch (error) {
-          console.error(`Error checking calendar ${calendar.name}:`, error);
+          console.error(`Error checking calendar ${calendarData.name}:`, error);
           unavailableCalendars.push({
-            calendar_id: calendar.id,
-            calendar_name: calendar.name,
-            priority: calendar.priority,
+            calendar_id: calendarData.id,
+            calendar_name: calendarData.name,
+            priority: calendarData.priority,
             conflict_reason: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`
           });
         }
@@ -326,7 +365,7 @@ export class AvailabilityService {
   }
 
   /**
-   * Sugere horários disponíveis para agendamento
+   * 🔧 MÉTODO CORRIGIDO: Sugere horários disponíveis para agendamento
    */
   async suggestAvailability(
     startDatetime: string,
@@ -341,6 +380,8 @@ export class AvailabilityService {
     timeBlocksConfig?: TimeBlocksConfig
   ): Promise<AvailabilitySlot[]> {
     try {
+      console.log(`🔍 Suggesting availability from ${startDatetime} to ${endDatetime}`);
+
       // 1. Buscar dados do serviço
       const { data: service, error: serviceError } = await supabase
         .from('services')
@@ -375,13 +416,19 @@ export class AvailabilityService {
         throw new Error('Instance not found');
       }
 
-      // Usar DateTime para preservar timezone
-      const originalTimezone = this.extractTimezone(startDatetime);
+      // 🔧 CORREÇÃO: Usar DateTime para preservar timezone
       let searchStartDate = DateTime.fromISO(startDatetime, { setZone: true });
       let searchEndDate = DateTime.fromISO(endDatetime, { setZone: true });
       let availableSlots: AvailabilitySlot[] = [];
       let attempts = 0;
       const maxAttempts = 30;
+
+      console.log(`🌍 Search timezone info:`, {
+        start: searchStartDate.toString(),
+        end: searchEndDate.toString(),
+        timezone: searchStartDate.zoneName,
+        offset: searchStartDate.offset
+      });
 
       do {
         // Gerar slots possíveis no timeframe atual
@@ -391,24 +438,37 @@ export class AvailabilityService {
           service.duration,
           intervalMinutes,
           instance.business_hours,
-          instance.timezone, // 🔧 CORREÇÃO: Passar timezone da instância
           calendars,
-          originalTimezone
+          searchStartDate.zoneName || 'America/Sao_Paulo'
         );
+
+        console.log(`📋 Generated ${possibleSlots.length} possible slots for attempt ${attempts + 1}`);
 
         // Verificar disponibilidade de cada slot
         for (const slot of possibleSlots) {
           if (availableSlots.length >= maxResults) break;
 
-          const startTime = DateTime.fromISO(slot.start_datetime, { setZone: true }).toJSDate();
-          const endTime = DateTime.fromISO(slot.end_datetime, { setZone: true }).toJSDate();
-          const totalStartTime = addMinutes(startTime, -(service.buffer_before || 0));
-          const totalEndTime = addMinutes(endTime, service.buffer_after || 0);
+          // 🔧 CONVERSÃO CORRETA: Parse do slot preservando timezone
+          const slotStartTime = DateTime.fromISO(slot.start_datetime, { setZone: true });
+          const slotEndTime = DateTime.fromISO(slot.end_datetime, { setZone: true });
+          
+          // Aplicar buffers em timezone local
+          const totalStartTime = slotStartTime.minus({ minutes: service.buffer_before || 0 });
+          const totalEndTime = slotEndTime.plus({ minutes: service.buffer_after || 0 });
+
+          console.log(`🔍 Checking slot: ${slot.start_datetime} (${slot.calendar_name})`);
+          console.log(`   Local times: ${totalStartTime.toString()} to ${totalEndTime.toString()}`);
+          
+          // 🎯 CONVERSÃO CORRETA PARA UTC
+          const utcStartTime = totalStartTime.toUTC().toJSDate();
+          const utcEndTime = totalEndTime.toUTC().toJSDate();
+          
+          console.log(`   UTC for Google: ${utcStartTime.toISOString()} to ${utcEndTime.toISOString()}`);
 
           const isAvailable = await this.checkGoogleCalendarAvailability(
             slot.google_calendar_id,
-            totalStartTime,
-            totalEndTime
+            utcStartTime,  // ✅ CORRIGIDO: UTC correto
+            utcEndTime     // ✅ CORRIGIDO: UTC correto
           );
 
           if (isAvailable) {
@@ -419,13 +479,19 @@ export class AvailabilityService {
               calendar_name: slot.calendar_name,
               priority: slot.priority
             });
+            console.log(`✅ Slot added: ${slot.start_datetime}`);
+          } else {
+            console.log(`❌ Slot rejected: ${slot.start_datetime}`);
           }
         }
+
+        console.log(`📊 Available slots so far: ${availableSlots.length}/${maxResults}`);
 
         // Se não encontrou slots suficientes e deve expandir
         if (availableSlots.length < maxResults && expandTimeframe && attempts < maxAttempts) {
           searchEndDate = searchEndDate.plus({ days: 1 });
           attempts++;
+          console.log(`🔄 Expanding timeframe to ${searchEndDate.toFormat('yyyy-MM-dd')}`);
         } else {
           break;
         }
@@ -433,7 +499,10 @@ export class AvailabilityService {
       } while (availableSlots.length < maxResults && expandTimeframe && attempts < maxAttempts);
 
       // Aplicar estratégia de retorno
-      return this.applyStrategy(availableSlots, strategy, maxResults, priorityConfig, timeBlocksConfig);
+      const finalResults = this.applyStrategy(availableSlots, strategy, maxResults, priorityConfig, timeBlocksConfig);
+      
+      console.log(`🎉 Final suggestion result: ${finalResults.length} slots`);
+      return finalResults;
 
     } catch (error) {
       console.error('Error suggesting availability:', error);
@@ -442,68 +511,36 @@ export class AvailabilityService {
   }
 
   /**
-   * Extrai timezone da string ISO
+   * Verifica se o horário está dentro do business hours
    */
-  private extractTimezone(isoString: string): string {
-    const timezoneMatch = isoString.match(/([+-]\d{2}:\d{2}|Z)$/);
-    return timezoneMatch ? timezoneMatch[1] : 'Z';
-  }
-
-  /**
-   * 🔧 CORREÇÃO: Verifica business hours usando timezone da instância
-   */
-  private isWithinBusinessHours(
-    startTime: DateTime, 
-    endTime: DateTime, 
-    businessHours: any, 
-    instanceTimezone: string
-  ): boolean {
-    // Converter para o timezone da instância para determinar dia e horário local
-    const localStartTime = startTime.setZone(instanceTimezone);
-    const localEndTime = endTime.setZone(instanceTimezone);
-    
-    const dayName = localStartTime.toFormat('cccc').toLowerCase();
+  private isWithinBusinessHours(startTime: Date, endTime: Date, businessHours: any): boolean {
+    const dayName = format(startTime, 'EEEE').toLowerCase();
     const daySchedule = businessHours[dayName];
 
-    console.log(`🕒 Business hours check for ${dayName}:`, {
-      original_start: startTime.toString(),
-      original_end: endTime.toString(),
-      local_start: localStartTime.toString(),
-      local_end: localEndTime.toString(),
-      instance_timezone: instanceTimezone,
-      day_schedule: daySchedule
-    });
-
     if (!daySchedule || !daySchedule.enabled) {
-      console.log(`❌ Day ${dayName} is not enabled`);
       return false;
     }
 
-    const startTimeStr = localStartTime.toFormat('HH:mm');
-    const endTimeStr = localEndTime.toFormat('HH:mm');
-
-    console.log(`🕒 Checking times: ${startTimeStr} - ${endTimeStr} against ${daySchedule.start_time} - ${daySchedule.end_time}`);
+    const startTimeStr = format(startTime, 'HH:mm');
+    const endTimeStr = format(endTime, 'HH:mm');
 
     // Verificar se está dentro do horário de funcionamento
     if (startTimeStr < daySchedule.start_time || endTimeStr > daySchedule.end_time) {
-      console.log(`❌ Outside business hours: ${startTimeStr}-${endTimeStr} not within ${daySchedule.start_time}-${daySchedule.end_time}`);
       return false;
     }
 
     // Verificar se não está no horário de pausa
     if (daySchedule.break_start && daySchedule.break_end) {
       if (!(endTimeStr <= daySchedule.break_start || startTimeStr >= daySchedule.break_end)) {
-        console.log(`❌ Conflicts with break time: ${daySchedule.break_start}-${daySchedule.break_end}`);
         return false;
       }
     }
 
-    console.log(`✅ Within business hours`);
     return true;
   }
 
   /**
-   * 🔧 CORREÇÃO FINAL: Verifica disponibilidade no Google Calendar
+   * 🔧 MÉTODO CORRIGIDO: Verifica disponibilidade no Google Calendar
    */
   private async checkGoogleCalendarAvailability(
     googleCalendarId: string,
@@ -511,6 +548,13 @@ export class AvailabilityService {
     endTime: Date
   ): Promise<boolean> {
     try {
+      console.log(`🔍 Google Calendar query:`, {
+        calendar_id: googleCalendarId,
+        query_start_utc: startTime.toISOString(),
+        query_end_utc: endTime.toISOString(),
+        duration_minutes: (endTime.getTime() - startTime.getTime()) / (1000 * 60)
+      });
+
       const response = await calendar.events.list({
         calendarId: googleCalendarId,
         timeMin: startTime.toISOString(),
@@ -521,19 +565,33 @@ export class AvailabilityService {
 
       const events = response.data.items || [];
       
-      // Filtrar eventos que não bloqueiam
+      console.log(`📊 Google Calendar response: ${events.length} events found`);
+
+      // 🔧 FILTRAR eventos que não bloqueiam (mesmo filtro de suggest)
       const potentialBlockingEvents = events.filter(event => {
-        if (event.transparency === 'transparent') return false;
-        if (event.status === 'cancelled') return false;
+        // Se transparency é 'transparent', NÃO bloqueia
+        if (event.transparency === 'transparent') {
+          console.log(`🟢 Ignoring transparent event: ${event.summary}`);
+          return false;
+        }
+        
+        // Se status é 'cancelled', NÃO bloqueia
+        if (event.status === 'cancelled') {
+          console.log(`🟢 Ignoring cancelled event: ${event.summary}`);
+          return false;
+        }
+        
+        // Todos os outros eventos podem bloquear
+        console.log(`🔴 Potential blocking event: ${event.summary || 'No title'} (${event.transparency || 'opaque'})`);
         return true;
       });
 
-      // Verificar sobreposição real
+      // 🔧 VERIFICAR sobreposição real com o horário solicitado
       const conflictingEvents = potentialBlockingEvents.filter(event => {
-        let eventStart: Date;
-        let eventEnd: Date;
-
         try {
+          let eventStart: Date;
+          let eventEnd: Date;
+
           if (event.start?.dateTime) {
             eventStart = new Date(event.start.dateTime);
           } else if (event.start?.date) {
@@ -550,7 +608,21 @@ export class AvailabilityService {
             return false;
           }
 
+          // ✅ VERIFICAÇÃO DE SOBREPOSIÇÃO: (eventStart < endTime) E (eventEnd > startTime)
           const hasOverlap = (eventStart < endTime) && (eventEnd > startTime);
+          
+          if (hasOverlap) {
+            console.log(`💥 OVERLAP DETECTED:`, {
+              event: event.summary,
+              event_start: eventStart.toISOString(),
+              event_end: eventEnd.toISOString(),
+              slot_start: startTime.toISOString(),
+              slot_end: endTime.toISOString(),
+              status: event.status,
+              transparency: event.transparency
+            });
+          }
+          
           return hasOverlap;
 
         } catch (error) {
@@ -559,15 +631,19 @@ export class AvailabilityService {
         }
       });
 
-      console.log(`📊 Calendar ${googleCalendarId} availability:`, {
+      const isAvailable = conflictingEvents.length === 0;
+      
+      console.log(`📊 Calendar ${googleCalendarId} - Detailed analysis:`, {
         query_period: `${startTime.toISOString()} to ${endTime.toISOString()}`,
         total_events: events.length,
+        transparent_events: events.filter(e => e.transparency === 'transparent').length,
+        cancelled_events: events.filter(e => e.status === 'cancelled').length,
         potential_blocking: potentialBlockingEvents.length,
         actual_conflicts: conflictingEvents.length,
-        available: conflictingEvents.length === 0
+        available: isAvailable
       });
 
-      return conflictingEvents.length === 0;
+      return isAvailable;
       
     } catch (error) {
       console.error('Error checking Google Calendar availability:', error);
@@ -576,7 +652,7 @@ export class AvailabilityService {
   }
 
   /**
-   * 🔧 CORREÇÃO: Gera slots usando timezone da instância
+   * 🔧 MÉTODO CORRIGIDO: Gera slots de tempo preservando timezone
    */
   private generateTimeSlots(
     startDate: DateTime,
@@ -584,7 +660,6 @@ export class AvailabilityService {
     durationMinutes: number,
     intervalMinutes: number,
     businessHours: any,
-    instanceTimezone: string,
     calendars: any[],
     originalTimezone: string
   ): Array<{
@@ -598,38 +673,39 @@ export class AvailabilityService {
     const slots: any[] = [];
     let currentDate = startDate.startOf('day');
 
+    console.log(`🔧 Generating slots in timezone: ${originalTimezone}`);
+
     while (currentDate <= endDate) {
-      // 🔧 CORREÇÃO: Converter para timezone da instância
-      const localDate = currentDate.setZone(instanceTimezone);
-      const dayName = localDate.toFormat('cccc').toLowerCase();
+      const dayName = currentDate.toFormat('cccc').toLowerCase();
       const daySchedule = businessHours[dayName];
 
       if (daySchedule && daySchedule.enabled) {
         // Período da manhã
-        let morningStart = this.parseTimeToDateTime(localDate, daySchedule.start_time);
+        let morningStart = this.parseTimeToDateTime(currentDate, daySchedule.start_time);
         let morningEnd = daySchedule.break_start 
-          ? this.parseTimeToDateTime(localDate, daySchedule.break_start)
-          : this.parseTimeToDateTime(localDate, daySchedule.end_time);
+          ? this.parseTimeToDateTime(currentDate, daySchedule.break_start)
+          : this.parseTimeToDateTime(currentDate, daySchedule.end_time);
 
-        this.addSlotsForPeriod(morningStart, morningEnd, durationMinutes, intervalMinutes, calendars, slots, originalTimezone);
+        this.addSlotsForPeriod(morningStart, morningEnd, durationMinutes, intervalMinutes, calendars, slots);
 
         // Período da tarde (se houver pausa)
         if (daySchedule.break_start && daySchedule.break_end) {
-          let afternoonStart = this.parseTimeToDateTime(localDate, daySchedule.break_end);
-          let afternoonEnd = this.parseTimeToDateTime(localDate, daySchedule.end_time);
+          let afternoonStart = this.parseTimeToDateTime(currentDate, daySchedule.break_end);
+          let afternoonEnd = this.parseTimeToDateTime(currentDate, daySchedule.end_time);
 
-          this.addSlotsForPeriod(afternoonStart, afternoonEnd, durationMinutes, intervalMinutes, calendars, slots, originalTimezone);
+          this.addSlotsForPeriod(afternoonStart, afternoonEnd, durationMinutes, intervalMinutes, calendars, slots);
         }
       }
 
       currentDate = currentDate.plus({ days: 1 });
     }
 
+    console.log(`📊 Total slots generated: ${slots.length}`);
     return slots;
   }
 
   /**
-   * Adiciona slots para um período específico
+   * 🔧 MÉTODO CORRIGIDO: Adiciona slots para um período específico
    */
   private addSlotsForPeriod(
     periodStart: DateTime,
@@ -637,18 +713,18 @@ export class AvailabilityService {
     durationMinutes: number,
     intervalMinutes: number,
     calendars: any[],
-    slots: any[],
-    originalTimezone: string
+    slots: any[]
   ): void {
     let currentTime = periodStart;
 
     while (currentTime.plus({ minutes: durationMinutes }) <= periodEnd) {
       const endTime = currentTime.plus({ minutes: durationMinutes });
 
+      // 🔧 IMPORTANTE: Preservar timezone original usando toISO()
       calendars.forEach(calendar => {
         slots.push({
-          start_datetime: currentTime.toString(),
-          end_datetime: endTime.toString(),
+          start_datetime: currentTime.toISO(),  // ✅ Preserva timezone
+          end_datetime: endTime.toISO(),        // ✅ Preserva timezone
           calendar_id: calendar.id,
           calendar_name: calendar.name,
           priority: calendar.priority,
@@ -712,6 +788,7 @@ export class AvailabilityService {
         result = slots.slice(0, maxResults);
     }
 
+    // Aplicar configuração de prioridade se habilitada
     if (priorityConfig.enabled) {
       result = this.applyPriorityConfig(result, priorityConfig);
     }
@@ -738,6 +815,7 @@ export class AvailabilityService {
 
     const finalConfig = { ...defaultConfig, ...config };
 
+    // Categorizar slots por período
     const morningSlots: AvailabilitySlot[] = [];
     const afternoonSlots: AvailabilitySlot[] = [];
     const eveningSlots: AvailabilitySlot[] = [];
@@ -755,6 +833,7 @@ export class AvailabilityService {
       }
     });
 
+    // Ordenar cada período por horário
     const sortByTime = (a: AvailabilitySlot, b: AvailabilitySlot) => 
       new Date(a.start_datetime).getTime() - new Date(b.start_datetime).getTime();
 
@@ -762,6 +841,7 @@ export class AvailabilityService {
     afternoonSlots.sort(sortByTime);
     eveningSlots.sort(sortByTime);
 
+    // Selecionar slots de cada período
     const result: AvailabilitySlot[] = [
       ...morningSlots.slice(0, finalConfig.morning_slots),
       ...afternoonSlots.slice(0, finalConfig.afternoon_slots),
@@ -778,6 +858,7 @@ export class AvailabilityService {
     slots: AvailabilitySlot[],
     maxResults: number
   ): AvailabilitySlot[] {
+    // Agrupar slots por dia
     const dayGroups = new Map<string, AvailabilitySlot[]>();
     
     slots.forEach(slot => {
@@ -788,24 +869,29 @@ export class AvailabilityService {
       dayGroups.get(day)!.push(slot);
     });
 
+    // Ordenar dias cronologicamente
     const sortedDays = Array.from(dayGroups.keys()).sort();
     const totalDays = sortedDays.length;
     
     if (totalDays === 0) return [];
 
+    // Calcular quantos slots por dia
     const slotsPerDay = Math.floor(maxResults / totalDays);
     const remainder = maxResults % totalDays;
 
     const result: AvailabilitySlot[] = [];
 
+    // Distribuir slots por dia
     sortedDays.forEach((day, index) => {
       const daySlots = dayGroups.get(day)!;
       const slotsToTake = slotsPerDay + (index < remainder ? 1 : 0);
       
+      // Ordenar slots do dia por horário
       daySlots.sort((a, b) => 
         new Date(a.start_datetime).getTime() - new Date(b.start_datetime).getTime()
       );
       
+      // Se tem mais slots que o necessário, distribuir uniformemente
       if (daySlots.length > slotsToTake && slotsToTake > 1) {
         const interval = Math.floor(daySlots.length / slotsToTake);
         for (let i = 0; i < slotsToTake; i++) {
@@ -813,10 +899,12 @@ export class AvailabilityService {
           result.push(daySlots[index]);
         }
       } else {
+        // Pegar os primeiros slots disponíveis
         result.push(...daySlots.slice(0, slotsToTake));
       }
     });
 
+    // Ordenar resultado final por horário
     return result.sort((a, b) => 
       new Date(a.start_datetime).getTime() - new Date(b.start_datetime).getTime()
     );
@@ -834,6 +922,7 @@ export class AvailabilityService {
         ? a.priority - b.priority 
         : b.priority - a.priority;
       
+      // Se prioridades são iguais, manter ordem por horário
       if (priorityComparison === 0) {
         return new Date(a.start_datetime).getTime() - new Date(b.start_datetime).getTime();
       }
@@ -848,6 +937,7 @@ export class AvailabilityService {
   private distributeEqually(slots: AvailabilitySlot[], maxResults: number): AvailabilitySlot[] {
     const calendarGroups = new Map<string, AvailabilitySlot[]>();
     
+    // Agrupar por calendário
     slots.forEach(slot => {
       if (!calendarGroups.has(slot.calendar_id)) {
         calendarGroups.set(slot.calendar_id, []);
@@ -855,6 +945,7 @@ export class AvailabilityService {
       calendarGroups.get(slot.calendar_id)!.push(slot);
     });
 
+    // Ordenar calendários por prioridade
     const sortedCalendars = Array.from(calendarGroups.entries()).sort((a, b) => {
       const priorityA = a[1][0]?.priority || 999;
       const priorityB = b[1][0]?.priority || 999;
@@ -866,6 +957,7 @@ export class AvailabilityService {
     const slotsPerCalendar = Math.floor(maxResults / calendarsCount);
     const remainder = maxResults % calendarsCount;
 
+    // Distribuir slots
     sortedCalendars.forEach(([calendarId, calendarSlots], index) => {
       const slots = slotsPerCalendar + (index < remainder ? 1 : 0);
       const sortedSlots = calendarSlots.sort((a, b) => 
@@ -874,6 +966,7 @@ export class AvailabilityService {
       result.push(...sortedSlots.slice(0, slots));
     });
 
+    // Ordenar resultado final por horário
     return result.sort((a, b) => 
       new Date(a.start_datetime).getTime() - new Date(b.start_datetime).getTime()
     );

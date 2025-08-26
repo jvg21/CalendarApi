@@ -11,7 +11,9 @@
     "test:google": "ts-node src/scripts/test-google-auth.ts",
     "test:specific-calendar": "ts-node src/scripts/test-specific-calendar.ts",
     "test:timezone": "ts-node src/scripts/test-timezone-fix.ts",
-    "test:filters": "ts-node src/scripts/test-appointments-filters.ts"
+    "test:filters": "ts-node src/scripts/test-appointments-filters.ts",
+    "debug:availability": "ts-node src/scripts/debug-availability-issue.ts",
+    "test:quick": "ts-node src/scripts/debug-timezone-issue.ts"
   },
   "keywords": [],
   "author": "",
