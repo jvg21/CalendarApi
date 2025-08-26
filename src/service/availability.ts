@@ -686,14 +686,14 @@ export class AvailabilityService {
           ? this.parseTimeToDateTime(currentDate, daySchedule.break_start)
           : this.parseTimeToDateTime(currentDate, daySchedule.end_time);
 
-        this.addSlotsForPeriod(morningStart, morningEnd, durationMinutes, intervalMinutes, calendars, slots);
+        this.addSlotsForPeriod(morningStart, morningEnd, durationMinutes, intervalMinutes, calendars, slots, startDate, endDate);
 
         // Período da tarde (se houver pausa)
         if (daySchedule.break_start && daySchedule.break_end) {
           let afternoonStart = this.parseTimeToDateTime(currentDate, daySchedule.break_end);
           let afternoonEnd = this.parseTimeToDateTime(currentDate, daySchedule.end_time);
 
-          this.addSlotsForPeriod(afternoonStart, afternoonEnd, durationMinutes, intervalMinutes, calendars, slots);
+          this.addSlotsForPeriod(afternoonStart, afternoonEnd, durationMinutes, intervalMinutes, calendars, slots, startDate, endDate);
         }
       }
 
@@ -713,12 +713,20 @@ export class AvailabilityService {
     durationMinutes: number,
     intervalMinutes: number,
     calendars: any[],
-    slots: any[]
+    slots: any[],
+    windowStart: DateTime,
+    windowEnd: DateTime
   ): void {
     let currentTime = periodStart;
 
     while (currentTime.plus({ minutes: durationMinutes }) <= periodEnd) {
       const endTime = currentTime.plus({ minutes: durationMinutes });
+
+      // Restringir ao intervalo de busca solicitado
+      if (currentTime < windowStart || endTime > windowEnd) {
+        currentTime = currentTime.plus({ minutes: intervalMinutes });
+        continue;
+      }
 
       // 🔧 IMPORTANTE: Preservar timezone original usando toISO()
       calendars.forEach(calendar => {
@@ -821,7 +829,7 @@ export class AvailabilityService {
     const eveningSlots: AvailabilitySlot[] = [];
 
     slots.forEach(slot => {
-      const slotTime = DateTime.fromISO(slot.start_datetime);
+      const slotTime = DateTime.fromISO(slot.start_datetime, { setZone: true });
       const timeStr = slotTime.toFormat('HH:mm');
 
       if (timeStr >= finalConfig.morning_start! && timeStr < finalConfig.afternoon_start!) {
@@ -862,7 +870,7 @@ export class AvailabilityService {
     const dayGroups = new Map<string, AvailabilitySlot[]>();
     
     slots.forEach(slot => {
-      const day = DateTime.fromISO(slot.start_datetime).toFormat('yyyy-MM-dd');
+      const day = DateTime.fromISO(slot.start_datetime, { setZone: true }).toFormat('yyyy-MM-dd');
       if (!dayGroups.has(day)) {
         dayGroups.set(day, []);
       }
