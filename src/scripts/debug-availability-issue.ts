@@ -239,7 +239,8 @@ async function debugAvailabilityIssue() {
         console.log(`  - ${apt.title}`);
         console.log(`    ${apt.start_datetime} até ${apt.end_datetime}`);
         console.log(`    Status: ${apt.status}`);
-        console.log(`    Calendar: ${apt.calendars?.name}`);
+        const calInfo = Array.isArray((apt as any).calendars) ? (apt as any).calendars[0] : (apt as any).calendars;
+        console.log(`    Calendar: ${calInfo?.name}`);
         console.log(`    Google Event ID: ${apt.google_event_id}`);
       });
     }
