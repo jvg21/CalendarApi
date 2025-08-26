@@ -680,20 +680,35 @@ export class AvailabilityService {
       const daySchedule = businessHours[dayName];
 
       if (daySchedule && daySchedule.enabled) {
-        // Período da manhã
-        let morningStart = this.parseTimeToDateTime(currentDate, daySchedule.start_time);
-        let morningEnd = daySchedule.break_start 
-          ? this.parseTimeToDateTime(currentDate, daySchedule.break_start)
-          : this.parseTimeToDateTime(currentDate, daySchedule.end_time);
+        // Definir limites brutos do dia de trabalho
+        const dayBusinessStart = this.parseTimeToDateTime(currentDate, daySchedule.start_time);
+        const dayBusinessEnd = this.parseTimeToDateTime(currentDate, daySchedule.end_time);
 
-        this.addSlotsForPeriod(morningStart, morningEnd, durationMinutes, intervalMinutes, calendars, slots);
+        // Período da manhã (início do expediente até início do intervalo OU fim do expediente)
+        const rawMorningStart = dayBusinessStart;
+        const rawMorningEnd = daySchedule.break_start
+          ? this.parseTimeToDateTime(currentDate, daySchedule.break_start)
+          : dayBusinessEnd;
+
+        // Limitar pela janela solicitada
+        const morningStart = DateTime.max(rawMorningStart, startDate);
+        const morningEnd = DateTime.min(rawMorningEnd, endDate);
+
+        if (morningStart < morningEnd) {
+          this.addSlotsForPeriod(morningStart, morningEnd, durationMinutes, intervalMinutes, calendars, slots);
+        }
 
         // Período da tarde (se houver pausa)
         if (daySchedule.break_start && daySchedule.break_end) {
-          let afternoonStart = this.parseTimeToDateTime(currentDate, daySchedule.break_end);
-          let afternoonEnd = this.parseTimeToDateTime(currentDate, daySchedule.end_time);
+          const rawAfternoonStart = this.parseTimeToDateTime(currentDate, daySchedule.break_end);
+          const rawAfternoonEnd = dayBusinessEnd;
 
-          this.addSlotsForPeriod(afternoonStart, afternoonEnd, durationMinutes, intervalMinutes, calendars, slots);
+          const afternoonStart = DateTime.max(rawAfternoonStart, startDate);
+          const afternoonEnd = DateTime.min(rawAfternoonEnd, endDate);
+
+          if (afternoonStart < afternoonEnd) {
+            this.addSlotsForPeriod(afternoonStart, afternoonEnd, durationMinutes, intervalMinutes, calendars, slots);
+          }
         }
       }
 
