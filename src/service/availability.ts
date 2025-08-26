@@ -416,9 +416,20 @@ export class AvailabilityService {
         throw new Error('Instance not found');
       }
 
-      // 🔧 CORREÇÃO: Usar DateTime para preservar timezone
-      let searchStartDate = DateTime.fromISO(startDatetime, { setZone: true });
-      let searchEndDate = DateTime.fromISO(endDatetime, { setZone: true });
+      // 🔧 CORREÇÃO: Normalizar para timezone IANA da instância quando válido
+      const rawStart = DateTime.fromISO(startDatetime, { setZone: true });
+      const rawEnd = DateTime.fromISO(endDatetime, { setZone: true });
+      const instanceTz: string | undefined = instance.timezone;
+      const hasValidInstanceTz = !!instanceTz && DateTime.local().setZone(instanceTz).isValid;
+
+      let searchStartDate = hasValidInstanceTz
+        ? rawStart.setZone(instanceTz!, { keepLocalTime: true })
+        : rawStart;
+      let searchEndDate = hasValidInstanceTz
+        ? rawEnd.setZone(instanceTz!, { keepLocalTime: true })
+        : rawEnd;
+
+      const resolvedZone = hasValidInstanceTz ? instanceTz! : (searchStartDate.zoneName || 'UTC');
       let availableSlots: AvailabilitySlot[] = [];
       let attempts = 0;
       const maxAttempts = 30;
@@ -426,7 +437,7 @@ export class AvailabilityService {
       console.log(`🌍 Search timezone info:`, {
         start: searchStartDate.toString(),
         end: searchEndDate.toString(),
-        timezone: searchStartDate.zoneName,
+        timezone: resolvedZone,
         offset: searchStartDate.offset
       });
 
@@ -439,7 +450,7 @@ export class AvailabilityService {
           intervalMinutes,
           instance.business_hours,
           calendars,
-          searchStartDate.zoneName || 'America/Sao_Paulo'
+          resolvedZone
         );
 
         console.log(`📋 Generated ${possibleSlots.length} possible slots for attempt ${attempts + 1}`);
