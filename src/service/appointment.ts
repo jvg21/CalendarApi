@@ -77,7 +77,7 @@ export class AppointmentService {
     if (endTime <= startTime) {
       throw new Error('End time must be after start time');
     }
-    
+
 
     // Verificar disponibilidade antes de criar agendamento
     console.log('🔍 Checking availability before creating appointment...');
@@ -145,6 +145,9 @@ export class AppointmentService {
     }
   }
 
+  // Modifique o método updateAppointment em src/service/appointment.ts
+  // Modifique o método updateAppointment em src/service/appointment.ts
+
   async updateAppointment(id: string, updates: Partial<Appointment>): Promise<Appointment> {
     const { data: appointment } = await supabase
       .from('appointments')
@@ -157,23 +160,47 @@ export class AppointmentService {
     }
 
     let endTime: string | undefined = updates.end_datetime;
+    let calendarChanged = false;
+    let newCalendar = null;
+    let newGoogleEventId: string |null|undefined;
 
-    // 🔧 CORREÇÃO: Recalcular end time usando luxon
+    // Verificar se o calendário foi alterado
+    if (updates.calendar_id && updates.calendar_id !== appointment.calendar_id) {
+      calendarChanged = true;
+
+      // Buscar dados do novo calendário
+      const { data: calendar, error: calendarError } = await supabase
+        .from('calendars')
+        .select('*')
+        .eq('id', updates.calendar_id)
+        .eq('is_active', true)
+        .single();
+
+      if (calendarError || !calendar) {
+        throw new Error('New calendar not found or inactive');
+      }
+
+      newCalendar = calendar;
+    }
+
+    // Recalcular end time usando luxon
     if (updates.start_datetime && !updates.end_datetime) {
       const startTime = DateTime.fromISO(updates.start_datetime, { setZone: true });
       endTime = startTime.plus({ minutes: appointment.services.duration }).toString();
     }
 
-    // Verificar disponibilidade se horário mudou
-    if (updates.start_datetime || updates.end_datetime) {
-      console.log('🔍 Checking availability for updated time...');
-      
+    // Verificar disponibilidade no calendário (novo ou atual)
+    const targetCalendarId = calendarChanged ? updates.calendar_id : appointment.calendar_id;
+
+    if (updates.start_datetime || updates.end_datetime || calendarChanged) {
+      console.log('🔍 Checking availability for updated appointment...');
+
       const newStartTime = updates.start_datetime || appointment.start_datetime;
-      
+
       const availabilityCheck = await this.availabilityService.checkAvailability(
         newStartTime,
         appointment.service_id,
-        appointment.calendar_id
+        targetCalendarId!
       );
 
       if (!availabilityCheck.available) {
@@ -183,14 +210,53 @@ export class AppointmentService {
       console.log('✅ Updated time slot confirmed as available');
     }
 
-    // Update Google Calendar event if time/title changed
-    if (updates.start_datetime || updates.end_datetime || updates.title) {
-      // 🔧 CORREÇÃO: Usar luxon para parsing
-      const eventStartTime = updates.start_datetime 
+    // Se o calendário foi alterado, mover o evento
+    if (calendarChanged && newCalendar) {
+      console.log('📅 Moving appointment to new calendar...');
+
+      try {
+        // 1. Deletar evento do calendário atual
+        await this.deleteEventFromSharedCalendar(
+          appointment.calendars.google_calendar_id,
+          appointment.google_event_id
+        );
+
+        // 2. Criar evento no novo calendário
+        const eventStartTime = updates.start_datetime
+          ? DateTime.fromISO(updates.start_datetime, { setZone: true })
+          : DateTime.fromISO(appointment.start_datetime, { setZone: true });
+
+        const eventEndTime = endTime
+          ? DateTime.fromISO(endTime, { setZone: true })
+          : DateTime.fromISO(appointment.end_datetime, { setZone: true });
+
+        const newGoogleEvent = await this.createEventInSharedCalendar({
+          targetCalendarId: newCalendar.google_calendar_id,
+          summary: updates.title || appointment.title,
+          description: updates.description || appointment.description ||
+            this.buildEventDescription(appointment.services, appointment.client_name, updates.description),
+          start: eventStartTime,
+          end: eventEndTime,
+          attendees: appointment.client_email ? [{ email: appointment.client_email }] : []
+        });
+
+        console.log('✅ Event moved to new calendar successfully');
+
+        // Guardar o novo google_event_id para atualização no banco
+        newGoogleEventId = newGoogleEvent.id;
+
+      } catch (error) {
+        console.error('❌ Error moving event to new calendar:', error);
+        throw new Error(`Failed to move appointment to new calendar: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
+    }
+    // Se apenas horário/título mudou (sem mudança de calendário)
+    else if (updates.start_datetime || updates.end_datetime || updates.title) {
+      const eventStartTime = updates.start_datetime
         ? DateTime.fromISO(updates.start_datetime, { setZone: true })
         : DateTime.fromISO(appointment.start_datetime, { setZone: true });
-      
-      const eventEndTime = endTime 
+
+      const eventEndTime = endTime
         ? DateTime.fromISO(endTime, { setZone: true })
         : DateTime.fromISO(appointment.end_datetime, { setZone: true });
 
@@ -206,6 +272,7 @@ export class AppointmentService {
       );
     }
 
+    // Preparar dados para atualização no banco
     const updateData = {
       ...updates,
       updated_at: new Date().toISOString()
@@ -215,11 +282,17 @@ export class AppointmentService {
       updateData.end_datetime = endTime;
     }
 
+    // Se o calendário foi alterado, incluir o novo google_event_id
+    if (calendarChanged && newGoogleEventId) {
+      updateData.google_event_id = newGoogleEventId;
+    }
+
+    // Atualizar no banco de dados
     const { data: updatedAppointment, error } = await supabase
       .from('appointments')
       .update(updateData)
       .eq('id', id)
-      .select()
+      .select('*, calendars(*), services(*)')
       .single();
 
     if (error) {
@@ -366,8 +439,8 @@ export class AppointmentService {
 
   // 🔧 CORREÇÃO: Função reformulada para trabalhar com DateTime
   private async updateEventInSharedCalendar(
-    calendarId: string, 
-    eventId: string, 
+    calendarId: string,
+    eventId: string,
     updates: {
       start: DateTime;
       end: DateTime;
@@ -478,100 +551,100 @@ export class AppointmentService {
   }
   // Adicionar este método na classe AppointmentService em src/service/appointment.ts
 
-/**
- * Atualiza automaticamente o status de agendamentos que passaram do horário
- */
-async updateExpiredAppointments(filters?: {
-  flow_id?: number;
-  user_id?: number;
-  agent_id?: number;
-  instance_id?: string;
-}): Promise<{
-  updated_count: number;
-  updated_appointments: Array<{
-    id: string;
-    title: string;
-    end_datetime: string;
-    old_status: string;
-    new_status: string;
-  }>;
-}> {
-  try {
-    console.log('🔍 Checking for expired appointments...');
+  /**
+   * Atualiza automaticamente o status de agendamentos que passaram do horário
+   */
+  async updateExpiredAppointments(filters?: {
+    flow_id?: number;
+    user_id?: number;
+    agent_id?: number;
+    instance_id?: string;
+  }): Promise<{
+    updated_count: number;
+    updated_appointments: Array<{
+      id: string;
+      title: string;
+      end_datetime: string;
+      old_status: string;
+      new_status: string;
+    }>;
+  }> {
+    try {
+      console.log('🔍 Checking for expired appointments...');
 
-    // Construir query base
-    let query = supabase
-      .from('appointments')
-      .select('id, title, end_datetime, status, flow_id, user_id, agent_id')
-      .in('status', ['scheduled', 'confirmed']) // Apenas agendamentos ativos
-      .lt('end_datetime', new Date().toISOString()); // Que já passaram do horário
+      // Construir query base
+      let query = supabase
+        .from('appointments')
+        .select('id, title, end_datetime, status, flow_id, user_id, agent_id')
+        .in('status', ['scheduled', 'confirmed']) // Apenas agendamentos ativos
+        .lt('end_datetime', new Date().toISOString()); // Que já passaram do horário
 
-    // Aplicar filtros opcionais
-    if (filters?.flow_id) {
-      query = query.eq('flow_id', filters.flow_id);
-    }
-    if (filters?.user_id) {
-      query = query.eq('user_id', filters.user_id);
-    }
-    if (filters?.agent_id) {
-      query = query.eq('agent_id', filters.agent_id);
-    }
-    if (filters?.instance_id) {
-      query = query.eq('instance_id', filters.instance_id);
-    }
+      // Aplicar filtros opcionais
+      if (filters?.flow_id) {
+        query = query.eq('flow_id', filters.flow_id);
+      }
+      if (filters?.user_id) {
+        query = query.eq('user_id', filters.user_id);
+      }
+      if (filters?.agent_id) {
+        query = query.eq('agent_id', filters.agent_id);
+      }
+      if (filters?.instance_id) {
+        query = query.eq('instance_id', filters.instance_id);
+      }
 
-    // Buscar agendamentos expirados
-    const { data: expiredAppointments, error: fetchError } = await query;
+      // Buscar agendamentos expirados
+      const { data: expiredAppointments, error: fetchError } = await query;
 
-    if (fetchError) {
-      throw new Error(`Error fetching expired appointments: ${fetchError.message}`);
-    }
+      if (fetchError) {
+        throw new Error(`Error fetching expired appointments: ${fetchError.message}`);
+      }
 
-    if (!expiredAppointments || expiredAppointments.length === 0) {
-      console.log('✅ No expired appointments found');
+      if (!expiredAppointments || expiredAppointments.length === 0) {
+        console.log('✅ No expired appointments found');
+        return {
+          updated_count: 0,
+          updated_appointments: []
+        };
+      }
+
+      console.log(`📋 Found ${expiredAppointments.length} expired appointments`);
+
+      // Atualizar status para 'completed'
+      const appointmentIds = expiredAppointments.map(apt => apt.id);
+
+      const { data: updatedAppointments, error: updateError } = await supabase
+        .from('appointments')
+        .update({
+          status: 'completed',
+          updated_at: new Date().toISOString()
+        })
+        .in('id', appointmentIds)
+        .select('id, title, end_datetime, status');
+
+      if (updateError) {
+        throw new Error(`Error updating expired appointments: ${updateError.message}`);
+      }
+
+      // Preparar resultado
+      const result = expiredAppointments.map(apt => ({
+        id: apt.id,
+        title: apt.title,
+        end_datetime: apt.end_datetime,
+        old_status: apt.status,
+        new_status: 'completed'
+      }));
+
+      console.log(`✅ Successfully updated ${result.length} expired appointments to 'completed' status`);
+
       return {
-        updated_count: 0,
-        updated_appointments: []
+        updated_count: result.length,
+        updated_appointments: result
       };
+
+    } catch (error) {
+      console.error('❌ Error updating expired appointments:', error);
+      throw new Error(`Failed to update expired appointments: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
-
-    console.log(`📋 Found ${expiredAppointments.length} expired appointments`);
-
-    // Atualizar status para 'completed'
-    const appointmentIds = expiredAppointments.map(apt => apt.id);
-    
-    const { data: updatedAppointments, error: updateError } = await supabase
-      .from('appointments')
-      .update({ 
-        status: 'completed',
-        updated_at: new Date().toISOString()
-      })
-      .in('id', appointmentIds)
-      .select('id, title, end_datetime, status');
-
-    if (updateError) {
-      throw new Error(`Error updating expired appointments: ${updateError.message}`);
-    }
-
-    // Preparar resultado
-    const result = expiredAppointments.map(apt => ({
-      id: apt.id,
-      title: apt.title,
-      end_datetime: apt.end_datetime,
-      old_status: apt.status,
-      new_status: 'completed'
-    }));
-
-    console.log(`✅ Successfully updated ${result.length} expired appointments to 'completed' status`);
-
-    return {
-      updated_count: result.length,
-      updated_appointments: result
-    };
-
-  } catch (error) {
-    console.error('❌ Error updating expired appointments:', error);
-    throw new Error(`Failed to update expired appointments: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
-}
 }

@@ -7,3 +7,4 @@ coverage
 README.md
 .gitignore
 .dockerignore
+src/scripts
