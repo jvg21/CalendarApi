@@ -797,7 +797,7 @@ export class AvailabilityService {
     calendars: any[],
     slots: any[]
   ): void {
-    let currentTime = periodStart;
+    let currentTime = this.roundToNextInterval(periodStart, intervalMinutes);
 
     while (currentTime.plus({ minutes: durationMinutes }) <= periodEnd) {
       const endTime = currentTime.plus({ minutes: durationMinutes });
@@ -820,7 +820,7 @@ export class AvailabilityService {
   /**
    * Converte string de tempo para DateTime
    */
- private parseTimeToDateTime(date: DateTime, timeStr: string): DateTime {
+  private parseTimeToDateTime(date: DateTime, timeStr: string): DateTime {
     const [hours, minutes] = timeStr.split(':').map(Number);
     return date.set({ hour: hours, minute: minutes, second: 0, millisecond: 0 });
   }
@@ -1050,5 +1050,24 @@ export class AvailabilityService {
     return result.sort((a, b) =>
       new Date(a.start_datetime).getTime() - new Date(b.start_datetime).getTime()
     );
+  }
+  private roundToNextInterval(datetime: DateTime, intervalMinutes: number): DateTime {
+    const minutes = datetime.minute;
+    const seconds = datetime.second;
+    const milliseconds = datetime.millisecond;
+
+    // Se já está "limpo", manter
+    if (seconds === 0 && milliseconds === 0 && minutes % intervalMinutes === 0) {
+      return datetime;
+    }
+
+    // Calcular próximo intervalo válido
+    const nextValidMinute = Math.ceil(minutes / intervalMinutes) * intervalMinutes;
+
+    if (nextValidMinute >= 60) {
+      return datetime.plus({ hours: 1 }).set({ minute: 0, second: 0, millisecond: 0 });
+    }
+
+    return datetime.set({ minute: nextValidMinute, second: 0, millisecond: 0 });
   }
 }
