@@ -93,11 +93,12 @@ export interface CreateAppointmentRequest {
   client_phone?: string;
   description?: string;
   calendar_id?: string;
-  
+
   // NOVOS CAMPOS ADICIONADOS
   flow_id?: number;
   agent_id?: number;
   user_id?: number;
+  check_alternative_calendars?: boolean; // Se true, verifica outros calendários da instância caso o horário não esteja disponível
 }
 
 export interface AvailabilityRequest {

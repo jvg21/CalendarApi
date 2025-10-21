@@ -26,7 +26,8 @@ export class AppointmentService {
       calendar_id,
       flow_id,
       agent_id,
-      user_id
+      user_id,
+      check_alternative_calendars
     } = request;
 
     // Get service details
@@ -88,7 +89,46 @@ export class AppointmentService {
     );
 
     if (!availabilityCheck.available) {
-      throw new Error(`Time slot not available: ${availabilityCheck.conflict_reason}`);
+      // Se o horário não está disponível e a opção de verificar calendários alternativos está ativa
+      if (check_alternative_calendars) {
+        console.log('⚠️ Time slot not available in selected calendar, checking alternative calendars...');
+
+        // Buscar todos os calendários ativos da instância, exceto o já testado
+        const { data: alternativeCalendars, error: calendarsError } = await supabase
+          .from('calendars')
+          .select('*')
+          .eq('instance_id', instance_id)
+          .eq('is_active', true)
+          .neq('id', targetCalendar.id)
+          .order('priority');
+
+        if (calendarsError || !alternativeCalendars || alternativeCalendars.length === 0) {
+          throw new Error(`Time slot not available in selected calendar: ${availabilityCheck.conflict_reason}. No alternative calendars found.`);
+        }
+
+        // Verificar disponibilidade em cada calendário alternativo
+        let foundAvailableCalendar = false;
+        for (const altCalendar of alternativeCalendars) {
+          const altAvailabilityCheck = await this.availabilityService.checkAvailability(
+            start_datetime,
+            service_id,
+            altCalendar.id
+          );
+
+          if (altAvailabilityCheck.available) {
+            console.log(`✅ Found available alternative calendar: ${altCalendar.name} (priority: ${altCalendar.priority})`);
+            targetCalendar = altCalendar;
+            foundAvailableCalendar = true;
+            break;
+          }
+        }
+
+        if (!foundAvailableCalendar) {
+          throw new Error(`Time slot not available in any calendar of this instance. Original reason: ${availabilityCheck.conflict_reason}`);
+        }
+      } else {
+        throw new Error(`Time slot not available: ${availabilityCheck.conflict_reason}`);
+      }
     }
 
     console.log('✅ Time slot confirmed as available');
